@@ -42,7 +42,10 @@ public sealed class Lobby
 {
     private readonly Dictionary<string, Room> _rooms = new();
     private readonly object _lock = new();
+    private readonly RecordStore _records;
     private int _nextId;
+
+    public Lobby(RecordStore records) => _records = records;
 
     public static long Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -105,7 +108,7 @@ public sealed class Lobby
                 lock (_lock)
                 {
                     if (!_rooms.TryGetValue(code, out room!))
-                        _rooms[code] = room = new Room(code);
+                        _rooms[code] = room = new Room(code, _records);
                 }
                 c.Name = name;
                 if (!room.Join(c)) c.Send(new { t = "error", msg = "방이 꽉 찼습니다 (최대 6명)." });
@@ -175,7 +178,15 @@ public sealed class Room
     private const int ChatHistoryMax = 30;
     private const int ChatMaxLength = 120;
 
-    public Room(string code) => Code = code;
+    private readonly RecordStore _records;
+
+    public Room(string code, RecordStore records)
+    {
+        Code = code;
+        _records = records;
+    }
+
+    private static readonly string[] TrackNames = { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링" };
 
     public bool IsEmpty { get { lock (_lock) return _clients.Count == 0; } }
 
@@ -287,6 +298,17 @@ public sealed class Room
                     string itemJson = m.ToJsonString();
                     foreach (var other in _clients)
                         if (other != c) other.Send(itemJson);
+                    break;
+                }
+
+                case "lap" when _phase == Phase.Race && c.InRace && _mode == "speed":
+                {
+                    // 한 바퀴 기록 (스피드전만. 아이템전은 운이 섞여서 랭킹에 넣지 않음)
+                    long time = (long?)m["time"] ?? 0;
+                    var (ok, rank, newBest) = _records.Submit(_track, c.Name, time, m["ghost"] as JsonArray);
+                    c.Send(new { t = "lapres", ok, rank, newBest, time });
+                    if (rank == 1)
+                        SystemChatLocked($"{c.Name} 님이 {TrackNames[_track]} 신기록! {time / 60000}:{time / 1000 % 60:00}.{time % 1000:000}");
                     break;
                 }
 

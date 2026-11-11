@@ -20,7 +20,18 @@ dotnet run
 |---|---|
 | 같은 와이파이 | 로비에 보이는 `http://192.168.x.x:5080/?room=코드` 링크를 그대로 보내기. 처음 실행할 때 Windows 방화벽 창이 뜨면 **허용** |
 | 다른 곳 (빠르게) | Cloudflare 임시 터널: `cloudflared tunnel --url http://localhost:5080` → `https://xxxx.trycloudflare.com` 주소가 나옴. 그 주소 뒤에 `/?room=코드`를 붙여 보내기. 내 PC가 켜져 있고 서버가 실행 중일 때만 접속 가능 |
-| 다른 곳 (항상 켜두기) | 이 폴더를 GitHub에 올리고 Render.com에서 "New Web Service → Docker"로 배포. 포함된 `Dockerfile`을 그대로 씁니다. 무료 요금제는 한동안 접속이 없으면 잠들어서 첫 접속이 30초쯤 느립니다 |
+| 다른 곳 (항상 켜두기) | Render.com 배포 (아래) |
+
+### Render.com에 배포하기 (고정 주소)
+
+코드는 공개 저장소 https://github.com/sesin0523-oss/drift-dash 에 있습니다.
+
+1. https://render.com/deploy?repo=https://github.com/sesin0523-oss/drift-dash 를 엽니다.
+2. Render에 로그인합니다(GitHub·Google 계정 가능, 신용카드 불필요).
+3. 저장소의 `render.yaml` 설정이 자동으로 채워지면 **Apply / Deploy**를 누릅니다. 포함된 `Dockerfile`로 빌드하며 몇 분 걸립니다.
+4. 끝나면 `https://drift-dash-xxxx.onrender.com` 같은 **고정 주소**가 생깁니다. 뒤에 `/?room=코드`를 붙여 친구에게 보내면 됩니다.
+
+이후 GitHub에 코드를 올리면(push) Render가 자동으로 다시 배포합니다. 무료 요금제는 15분 동안 접속이 없으면 잠들어서, 첫 접속은 30~60초 걸릴 수 있습니다.
 
 ## 조작
 
@@ -31,8 +42,22 @@ dotnet run
 | ← → / A D | 조향 |
 | Space | 드리프트. 길게 미끄러지다 놓으면 **미니 터보** (게이지 파랑 → 주황) |
 | Shift / E | 아이템 사용 (아이템전) |
+| G | 고스트 켜기/끄기 (스피드전) |
 | M | 소리 켜기/끄기 |
 | Enter | (레이스 중) 채팅 열기. 보내거나 Esc를 누르면 닫히고 바로 운전으로 돌아감 |
+
+## 기록·랭킹·고스트
+
+- **스피드전**에서 한 바퀴를 돌 때마다 랩 타임이 서버 랭킹에 제출됩니다. 트랙별로 이름마다 최고 기록 하나씩, 상위 10명까지 남습니다. 아이템전은 운이 섞이므로 제외합니다.
+- 로비에서 고른 트랙의 **TOP 5**가 보이고, 1위를 갱신하면 방 채팅에 "신기록!" 알림이 뜹니다.
+- **고스트**: 트랙 1위가 달린 한 바퀴를 0.1초 간격 위치로 저장해 두었다가, 레이스 중 내 바퀴 시간에 맞춰 반투명한 차로 재생합니다. 누가 더 빠른지 바로 비교할 수 있고, **G**로 켜고 끕니다.
+- **부정 기록 거르기**: 서버는 트랙 길이로 계산한 최소 시간(최고 부스트 속도로 안쪽 라인을 달려도 걸리는 시간)보다 빠른 기록과, 랩 시간과 고스트 프레임 수가 맞지 않는 기록을 거부합니다.
+- 저장 위치: `data/records.json` (환경변수 `DATA_DIR`로 바꿀 수 있음). **Render 무료 요금제는 서버가 잠들거나 다시 배포되면 디스크가 초기화되어 랭킹도 사라집니다.** 영구 보관이 필요하면 유료 디스크나 외부 DB를 붙여야 합니다.
+
+| API | 내용 |
+|---|---|
+| `GET /api/records` | 트랙별 TOP 10 `[[{name, time, date}], ...]` |
+| `GET /api/ghost/{트랙번호}` | 1위 고스트 `{name, time, hz, frames:[x,y,a,...]}` (없으면 404) |
 
 ## 아이템전
 
@@ -88,7 +113,9 @@ dotnet run
 
 ```
 Program.cs          웹서버 시작, /ws(WebSocket), /api/info(같은 와이파이 주소)
-Rooms.cs            Client(보내기 큐), Lobby(방 목록), Room(참가자·출발 시각·중계·순위·채팅)
+Rooms.cs            Client(보내기 큐), Lobby(방 목록), Room(참가자·출발 시각·중계·순위·채팅·아이템 중계)
+Records.cs          트랙별 랭킹 TOP 10, 1위 고스트, 부정 기록 거르기, data/records.json 저장
+Dockerfile, render.yaml  클라우드(Render) 배포 설정
 wwwroot/index.html  로비, 결과, 터치 버튼
 wwwroot/js/
   main.js    게임 흐름 (로비 → 카운트다운 → 레이스 → 결과), 입력, HUD

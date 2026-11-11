@@ -136,6 +136,20 @@ button:active { transform: translateY(1px); }
 #resultList .place { width: 28px; font-weight: 800; color: var(--accent2); }
 #resultList .time { margin-left: auto; }
 
+/* 랭킹 */
+.records {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 197, 49, 0.07);
+  border: 1px solid rgba(255, 197, 49, 0.25);
+}
+#recordList { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 3px; font-size: 14px; }
+#recordList li { display: flex; gap: 10px; font-variant-numeric: tabular-nums; }
+#recordList .place { width: 18px; font-weight: 800; color: var(--accent2); }
+#recordList .time { margin-left: auto; }
+#recordList .empty { color: var(--muted); font-size: 13px; }
+
 /* 채팅 */
 #chatLog {
   overflow-y: auto;

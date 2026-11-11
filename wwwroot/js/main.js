@@ -41,6 +41,8 @@ const trackCache = new Map();
 let lanBase = null;            // localhost 로 열었을 때 친구에게 줄 주소
 let banner = null;             // { text, until, color }
 let lastCount = null;
+let records = [];              // 트랙별 TOP 10 [{name, time}]
+let ghostOn = store.get('dd-ghost') !== '0';
 
 const getTrack = (i) => {
   if (!trackCache.has(i)) trackCache.set(i, buildTrack(i));
@@ -78,6 +80,11 @@ addEventListener('keydown', (e) => {
   if (GAME_KEYS.includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.code === 'KeyM') sound.setMuted(!sound.muted);
+  if (e.code === 'KeyG') {
+    ghostOn = !ghostOn;
+    store.set('dd-ghost', ghostOn ? '1' : '0');
+    if (mode === 'race') showBanner(ghostOn ? '고스트 켬' : '고스트 끔', 900, '#ffffff');
+  }
   if (ITEM_KEYS.includes(e.code) && !e.repeat) useItem();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
@@ -198,6 +205,18 @@ function useItem() {
   race.items.use(race.car, performance.now(), idx > 0 ? st[idx - 1].id : null);
 }
 
+// 내 랩 기록 결과
+net.on('lapres', (m) => {
+  if (!m.ok || !m.rank) return;
+  if (m.rank === 1) {
+    showBanner(`트랙 신기록!  ${fmtTime(m.time)}`, 2200, '#ffc531');
+    sound.fanfare();
+  } else {
+    showBanner(`랭킹 ${m.rank}위 기록!  ${fmtTime(m.time)}`, 1800, '#ffffff');
+  }
+  fetchRecords();
+});
+
 net.on('results', (m) => showResults(m));
 net.on('chat', (m) => chat.add(m));
 net.on('left', (m) => remotes.delete(m.id));
@@ -283,6 +302,7 @@ function renderLobby() {
   $('trackDesc').textContent = TRACKS[roster.track].desc + (roster.mode === 'item'
     ? ' · 아이템전: ? 상자를 먹고 Shift/E 로 사용 (바나나·미사일·보호막·부스터)'
     : '');
+  renderRecords();
 
   const host = isHost();
   $('start').classList.toggle('hidden', !host);
@@ -297,7 +317,39 @@ function renderLobby() {
   $('waitLobby').textContent = host ? '' : `${hostName} 님이 로비로 돌아가기를 기다리는 중...`;
 }
 
+// ───────────────────────── 랭킹 ─────────────────────────
+
+function fetchRecords() {
+  fetch('/api/records').then((r) => r.json()).then((data) => {
+    records = data;
+    renderRecords();
+  }).catch(() => { /* 무시 */ });
+}
+
+function renderRecords() {
+  const list = records[roster.track] ?? [];
+  const ol = $('recordList');
+  ol.innerHTML = '';
+  $('recordTitle').textContent = `${TRACKS[roster.track].name} 랭킹 (스피드전 한 바퀴)`;
+  if (!list.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = '아직 기록이 없어요. 첫 기록의 주인공이 되어 보세요!';
+    ol.append(li);
+    return;
+  }
+  list.slice(0, 5).forEach((r, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="place"></span><span class="nm"></span><span class="time"></span>';
+    li.querySelector('.place').textContent = i + 1;
+    li.querySelector('.nm').textContent = r.name + (r.name === myName ? ' (나)' : '');
+    li.querySelector('.time').textContent = fmtTime(r.time);
+    ol.append(li);
+  });
+}
+
 function enterLobby() {
+  fetchRecords();
   mode = 'lobby';
   race = null;
   remotes.clear();
@@ -320,7 +372,14 @@ function startRace(m) {
     finishers: [], myTime: null, sendTick: 0, bestLap: null, prevBoost: 0,
     hitCooldown: new Map(), feed: [], mode: m.mode,
     items: null,
+    ghost: null,          // 트랙 1위의 주행 경로 (스피드전)
+    ghostRec: [],         // 이번 바퀴 내 주행 기록 [x, y, a, ...] 0.1초 간격
   };
+  if (m.mode !== 'item') {
+    fetch(`/api/ghost/${m.track}`).then((r) => (r.ok ? r.json() : null)).then((g) => {
+      if (race && race.id === m.raceId) race.ghost = g;
+    }).catch(() => { /* 기록 없음 */ });
+  }
   if (m.mode === 'item') {
     race.items = new Items(track, me, {
       send: (msg) => net.send(msg),
@@ -396,11 +455,21 @@ function stepRace() {
   race.prevBoost = car.boost;
   sound.update(car.speed, input.throttle, car.drifting, car.boost > 0);
 
+  // 고스트용 주행 기록: 이번 바퀴 시작부터 0.1초마다 위치 하나
+  if (race.mode !== 'item' && t >= 0 && !car.finished && !car.justLapped) {
+    const lapElapsed = t - car.lapStart;
+    while (race.ghostRec.length / 3 <= lapElapsed / 100)
+      race.ghostRec.push(Math.round(car.x), Math.round(car.y), Math.round(car.a * 100) / 100);
+  }
+
   // 바퀴 / 완주
   if (car.justLapped) {
     car.justLapped = false;
     const lt = car.lapTimes[car.lapTimes.length - 1];
     if (race.bestLap == null || lt < race.bestLap) race.bestLap = lt;
+    // 스피드전이면 이 바퀴 기록 + 주행 경로를 서버 랭킹에 제출
+    if (race.mode !== 'item') net.send({ t: 'lap', time: Math.round(lt), ghost: race.ghostRec });
+    race.ghostRec = [];
     if (car.lap > race.laps) {
       car.finished = true;
       race.myTime = t;
@@ -502,8 +571,43 @@ function draw(time) {
   const st = standings();
   const target = race.car ?? remotes.get(st[0]?.id);
   renderer.follow(target, DT);
-  renderer.drawWorld(track, cars, nameOf, t, (ctx) => race.items?.draw(ctx, t, performance.now()));
+  renderer.drawWorld(track, cars, nameOf, t, (ctx) => {
+    race.items?.draw(ctx, t, performance.now());
+    drawGhost(ctx);
+  });
   drawHud(st);
+}
+
+/** 고스트: 트랙 1위가 달린 한 바퀴를, 내 이번 바퀴와 같은 시간으로 맞춰 반투명하게 재생 */
+function ghostPose() {
+  const g = race.ghost, car = race.car;
+  if (!g || !ghostOn || !car || car.finished) return null;
+  const elapsed = raceTime() - car.lapStart;
+  if (elapsed < 0) return null;
+  const k = elapsed / (1000 / g.hz), i = Math.floor(k), n = g.frames.length / 3;
+  if (i + 1 >= n) return null;
+  const f = g.frames, u = k - i;
+  let da = f[i * 3 + 5] - f[i * 3 + 2];
+  da = Math.atan2(Math.sin(da), Math.cos(da));
+  return {
+    x: f[i * 3] + (f[i * 3 + 3] - f[i * 3]) * u,
+    y: f[i * 3 + 1] + (f[i * 3 + 4] - f[i * 3 + 1]) * u,
+    a: f[i * 3 + 2] + da * u,
+  };
+}
+
+function drawGhost(ctx) {
+  const p = ghostPose();
+  if (!p) return;
+  ctx.save();
+  ctx.globalAlpha = 0.38;
+  renderer.drawCar(p, '#e9ecf5');
+  ctx.globalAlpha = 0.75;
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`고스트 · ${race.ghost.name}`, p.x, p.y - 26);
+  ctx.restore();
 }
 
 function drawHud(st) {
@@ -522,6 +626,9 @@ function drawHud(st) {
     R.text(`/ ${st.length}`, 20 + (place >= 10 ? 62 : 46) * s, 84 * s, 18 * s, '#dddddd');
     R.text(fmtTime(car.finished ? race.myTime : Math.max(0, rt)), 20, 114 * s, 20 * s);
     if (race.bestLap != null) R.text(`최고 랩 ${fmtTime(race.bestLap)}`, 20, 138 * s, 15 * s, '#cfd3da', 'left', '600');
+    if (race.ghost && !race.items)
+      R.text(`트랙 기록 ${fmtTime(race.ghost.time)} · ${race.ghost.name}${ghostOn ? '' : ' (G: 고스트 켜기)'}`,
+        20, (race.bestLap != null ? 158 : 138) * s, 14 * s, '#ffe08a', 'left', '600');
 
     // 속도계 + 부스트/드리프트 게이지
     const kmh = Math.round(car.speed * 0.36);
@@ -627,6 +734,7 @@ function frame(time) {
 updateLink();
 renderLobby();
 placeChat();
+fetchRecords();
 fetch('/api/info').then((r) => r.json()).then((info) => {
   if (info.lan?.length) {
     lanBase = info.lan[0];

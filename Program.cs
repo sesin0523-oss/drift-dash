@@ -19,10 +19,18 @@ app.UseStaticFiles(new StaticFileOptions
 });
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(15) });
 
-var lobby = new Lobby();
+// 트랙 기록: DATA_DIR 환경변수가 있으면 거기에, 없으면 프로젝트 폴더의 data/ 에 저장
+var records = new RecordStore(Environment.GetEnvironmentVariable("DATA_DIR")
+                              ?? Path.Combine(app.Environment.ContentRootPath, "data"));
+var lobby = new Lobby(records);
 
 // 같은 와이파이 친구에게 줄 주소 (localhost 로 열었을 때 화면에 보여줌)
 app.MapGet("/api/info", () => new { lan = LanIPs().Select(ip => $"http://{ip}:{port}").ToArray() });
+
+// 트랙별 랭킹 (상위 10명) / 1위 고스트
+app.MapGet("/api/records", () => records.Top());
+app.MapGet("/api/ghost/{track:int}", (int track) =>
+    records.Ghost(track) is { } g ? Results.Ok(g) : Results.NotFound());
 
 // 실시간 통신
 app.Map("/ws", async ctx =>

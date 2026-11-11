@@ -326,6 +326,18 @@ export class Renderer {
       ctx.stroke(h.shape);
       ctx.setLineDash([]);
       ctx.lineDashOffset = 0;
+    } else if (h.kind === 'cliff') {
+      // 낭떠러지: 아래로 갈수록 어두워지는 골짜기 + 가장자리 바위선
+      ctx.fillStyle = '#1b1a1f';
+      ctx.fill(h.shape);
+      ctx.lineWidth = 26;
+      ctx.strokeStyle = 'rgba(90,85,80,0.9)';
+      ctx.stroke(h.shape);
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.setLineDash([4, 18]);
+      ctx.stroke(h.shape);
+      ctx.setLineDash([]);
     } else {
       ctx.fillStyle = '#1e6fa8';
       ctx.fill(h.shape);
@@ -359,6 +371,16 @@ export class Renderer {
         ctx.strokeStyle = 'rgba(150,180,210,0.6)';
         ctx.lineWidth = 2;
         ctx.beginPath(); ctx.arc(0, 0, p.r * 0.6, 0, Math.PI * 2); ctx.stroke();
+      } else if (p.kind === 'sand') {
+        // 모래 언덕: 물결 무늬
+        ctx.fillStyle = 'rgba(214,176,104,0.9)';
+        ctx.beginPath(); ctx.ellipse(0, 0, p.r * 1.3, p.r * 0.9, p.a, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(160,120,60,0.55)';
+        ctx.lineWidth = 2;
+        ctx.rotate(p.a);
+        for (const k of [-0.4, 0, 0.4]) {
+          ctx.beginPath(); ctx.arc(0, k * p.r + p.r * 0.6, p.r * 0.7, Math.PI * 1.2, Math.PI * 1.8); ctx.stroke();
+        }
       } else {   // mud
         ctx.fillStyle = '#5b3d22';
         ctx.beginPath(); ctx.ellipse(0, 0, p.r * 1.2, p.r * 0.85, p.a + 0.4, 0, Math.PI * 2); ctx.fill();
@@ -390,6 +412,16 @@ export class Renderer {
         ctx.beginPath(); ctx.roundRect(-o.r * 2.4, -o.r * 0.75, o.r * 4.8, o.r * 1.5, o.r * 0.7); ctx.fill();
         ctx.fillStyle = '#c9a26b';
         ctx.beginPath(); ctx.ellipse(o.r * 2.3, 0, o.r * 0.35, o.r * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+      } else if (o.kind === 'crate') {
+        // 화물 상자
+        ctx.rotate(o.a);
+        const s = o.r * 1.6;
+        ctx.fillStyle = ['#d9622b', '#2b7bd9', '#3aa65a'][Math.floor(o.at * 10) % 3];
+        ctx.fillRect(-s / 2, -s / 2, s, s);
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = 2;
+        for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.moveTo(-s / 2, k * s / 5); ctx.lineTo(s / 2, k * s / 5); ctx.stroke(); }
+        ctx.strokeRect(-s / 2, -s / 2, s, s);
       } else {   // rock
         ctx.fillStyle = '#7d736a';
         ctx.beginPath();

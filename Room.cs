@@ -25,10 +25,10 @@ public sealed class Room
 {
     public const int MaxRacers = 6;            // 사람 + 봇
     public const int MaxConnections = 10;      // 관전자 포함
-    public const int TrackCount = 9;
+    public const int TrackCount = 12;
     private static readonly int[] PlacePoints = { 10, 8, 6, 5, 4, 3 };
     private static readonly string[] TrackNames =
-        { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로", "화산 분지", "숲속 와인딩", "공항 활주로" };
+        { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로", "화산 분지", "숲속 와인딩", "공항 활주로", "사막 오아시스", "항구 부두", "절벽 고개" };
     private const int TeamGaugeMax = 100;
     private static readonly string[] BotNames = { "봇 번개", "봇 터보", "봇 회오리", "봇 질주", "봇 스키드", "봇 니트로" };
     private static readonly string[] LevelNames = { "쉬움", "보통", "어려움" };

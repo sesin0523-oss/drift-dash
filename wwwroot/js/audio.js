@@ -158,6 +158,7 @@ export class Sound {
       case 'magnet': seq([300, 450, 600, 750], 50, 'sine', 0.18); break;
       case 'cloak': seq([1047, 1319, 1568], 70, 'triangle', 0.15); break;
       case 'splash': this.bump(500); seq([700, 500, 300, 200], 60, 'sine', 0.2); break;
+      case 'fall': seq([900, 700, 500, 300, 150], 70, 'triangle', 0.18); setTimeout(() => this.bump(600), 400); break;
       case 'lava': this.bump(700); seq([200, 150, 100], 90, 'sawtooth', 0.15); break;
     }
   }

@@ -952,15 +952,17 @@ function magnetPull(c, cars) {
 /** 빠지거나(용암·바다) 감전되면 효과 */
 function trackFx(c, isMe) {
   if (c.fell) {
-    const lava = c.fell.kind === 'lava';
+    const lava = c.fell.kind === 'lava', cliff = c.fell.kind === 'cliff';
     for (let i = 0; i < 26; i++) {
       const a = Math.random() * Math.PI * 2, sp = 80 + Math.random() * 260;
-      renderer.puff(c.fell.x, c.fell.y, lava ? (Math.random() < 0.5 ? 'rgba(255,120,20,' : 'rgba(255,210,60,') : 'rgba(200,235,255,',
+      renderer.puff(c.fell.x, c.fell.y, lava ? (Math.random() < 0.5 ? 'rgba(255,120,20,' : 'rgba(255,210,60,')
+        : cliff ? 'rgba(170,160,145,' : 'rgba(200,235,255,',
         5 + Math.random() * 6, Math.cos(a) * sp, Math.sin(a) * sp, 0.6);
     }
     if (isMe) {
-      showBanner(lava ? '용암에 빠졌어요! 견인 중…' : '바다에 빠졌어요! 견인 중…', 1500, lava ? '#ff7a2e' : '#7cc4ff');
-      sound.sfx(lava ? 'lava' : 'splash');
+      showBanner(lava ? '용암에 빠졌어요! 견인 중…' : cliff ? '절벽에서 떨어졌어요! 견인 중…' : '바다에 빠졌어요! 견인 중…',
+        1500, lava ? '#ff7a2e' : cliff ? '#d9cdb8' : '#7cc4ff');
+      sound.sfx(lava ? 'lava' : cliff ? 'fall' : 'splash');
       renderer.shake = 12;
     }
   }

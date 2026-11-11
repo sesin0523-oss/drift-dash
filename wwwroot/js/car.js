@@ -208,7 +208,7 @@ export class Car {
     // 노면 (진흙·눈 더미·빙판)
     this.surface = null;
     for (const p of track.patches) if ((this.x - p.x) ** 2 + (this.y - p.y) ** 2 < p.r * p.r) this.surface = p.kind;
-    const surfSpeed = this.surface === 'mud' ? 0.5 : this.surface === 'snow' ? 0.6 : 1;
+    const surfSpeed = this.surface === 'mud' ? 0.5 : this.surface === 'snow' ? 0.6 : this.surface === 'sand' ? 0.65 : 1;
 
     // 스핀 중: 조작 불가, 빙글빙글 돌며 미끄러짐
     if (this.immune > 0) this.immune -= dt;

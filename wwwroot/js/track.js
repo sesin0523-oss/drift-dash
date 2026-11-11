@@ -121,6 +121,54 @@ export const TRACKS = [
   },
 ];
 
+// ───────────────────────── 트랙 특색 ─────────────────────────
+// at: 트랙 위치(0~1), lat: 도로 폭 대비 옆 위치(-0.5~0.5), r: 반지름
+// hazards: 도로 옆이 벽 대신 용암/바다 → 빠지면 견인되어 조금 뒤에서 다시 출발
+// patches: 도로 위 노면 (mud 진흙·snow 눈 더미 = 감속, ice 빙판 = 미끄러움)
+// obstacles: 장애물 (rock 바위·log 통나무 = 막힘, bumper 범퍼 = 세게 튕김)
+// wind: 옆으로 미는 바람 (주기적으로 방향이 바뀜)
+// zapWalls: 벽에 닿으면 감전되어 잠깐 느려짐
+const FEATURES = {
+  '협곡 헤어핀': {
+    note: '굴러떨어진 바위 조심',
+    obstacles: [[0.1, 0.25], [0.28, -0.25], [0.52, 0.22], [0.67, -0.22], [0.86, 0.25]]
+      .map(([at, lat]) => ({ at, lat, r: 17, kind: 'rock' })),
+  },
+  '네온 시티': { note: '전기 방벽: 벽에 닿으면 감전', zapWalls: true },
+  '도넛 링': {
+    note: '도로 한가운데 핀볼 범퍼',
+    obstacles: [0.12, 0.37, 0.62, 0.87].map((at) => ({ at, lat: 0, r: 15, kind: 'bumper' })),
+  },
+  '스노우 밸리': {
+    note: '눈 더미(감속)와 빙판(미끄러움)',
+    patches: [
+      ...[[0.2, 0.25], [0.35, -0.25], [0.6, 0.2], [0.8, -0.2]].map(([at, lat]) => ({ at, lat, r: 30, kind: 'snow' })),
+      { at: 0.45, lat: 0, r: 48, kind: 'ice' }, { at: 0.9, lat: 0, r: 48, kind: 'ice' },
+    ],
+  },
+  '해안 고속도로': {
+    note: '직선 옆은 바다! 빠지면 견인',
+    hazards: [{ from: 0.02, to: 0.14, side: 1, kind: 'water' }, { from: 0.72, to: 0.86, side: -1, kind: 'water' }],
+  },
+  '화산 분지': {
+    note: '커브 바깥은 용암! 빠지면 견인',
+    hazards: [
+      { from: 0.14, to: 0.24, side: -1, kind: 'lava' }, { from: 0.38, to: 0.48, side: 1, kind: 'lava' },
+      { from: 0.62, to: 0.72, side: -1, kind: 'lava' }, { from: 0.84, to: 0.94, side: 1, kind: 'lava' },
+    ],
+  },
+  '숲속 와인딩': {
+    note: '진흙 웅덩이와 쓰러진 통나무',
+    patches: [[0.15, 0.2], [0.42, -0.2], [0.58, 0.2], [0.82, -0.2]].map(([at, lat]) => ({ at, lat, r: 32, kind: 'mud' })),
+    obstacles: [{ at: 0.3, lat: 0.3, r: 14, kind: 'log' }, { at: 0.68, lat: -0.3, r: 14, kind: 'log' }],
+  },
+  '공항 활주로': {
+    note: '활주로에 부는 제트 바람',
+    wind: [{ from: 0.04, to: 0.26, force: 320, period: 2.6 }],
+  },
+};
+for (const t of TRACKS) t.features = FEATURES[t.name] ?? {};
+
 function catmullRom(p0, p1, p2, p3, t) {
   const t2 = t * t, t3 = t2 * t;
   const f = (a, b, c, d) => 0.5 * ((2 * b) + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
@@ -188,9 +236,44 @@ export function buildTrack(index) {
   pts.forEach((p, i) => (i ? path.lineTo(p.x, p.y) : path.moveTo(p.x, p.y)));
   path.closePath();
 
+  // 트랙 특색 배치
+  const F = def.features ?? {};
+  const atIdx = (f) => Math.floor(f * n) % n;
+  const place = (o) => {
+    const i = atIdx(o.at), p = pts[i], lat = (o.lat ?? 0) * def.width;
+    return { ...o, i, x: p.x + p.nx * lat, y: p.y + p.ny * lat, a: Math.atan2(p.ty, p.tx) };
+  };
+  const obstacles = (F.obstacles ?? []).map(place);
+  const patches = (F.patches ?? []).map(place);
+
+  // 용암/바다: 점마다 어느 쪽(side)이 빠지는 곳인지. 그리기용 띠 모양도 미리 만듦
+  const hazardSide = new Int8Array(n);
+  const hazardKind = new Array(n).fill(null);
+  const hazards = (F.hazards ?? []).map((h) => {
+    const i0 = atIdx(h.from), i1 = atIdx(h.to);
+    const idx = [];
+    for (let i = i0; i !== i1; i = (i + 1) % n) idx.push(i);
+    for (const i of idx) { hazardSide[i] = h.side; hazardKind[i] = h.kind; }
+    const inner = def.width / 2 + 12, outer = def.width / 2 + SHOULDER + 90;
+    const shape = new Path2D();
+    idx.forEach((i, k) => {
+      const p = pts[i], x = p.x + p.nx * h.side * inner, y = p.y + p.ny * h.side * inner;
+      k ? shape.lineTo(x, y) : shape.moveTo(x, y);
+    });
+    for (const i of [...idx].reverse()) {
+      const p = pts[i];
+      shape.lineTo(p.x + p.nx * h.side * outer, p.y + p.ny * h.side * outer);
+    }
+    shape.closePath();
+    return { ...h, i0, i1, shape };
+  });
+
+  const wind = (F.wind ?? []).map((w) => ({ ...w, i0: atIdx(w.from), i1: atIdx(w.to) }));
+
   return {
     index, def, pts, n, length: n * STEP, step: STEP, width: def.width, half: def.width / 2,
     cps, boosts, path,
+    obstacles, patches, hazards, hazardSide, hazardKind, wind, zapWalls: !!F.zapWalls,
     bounds: { minX: minX - 200, minY: minY - 200, maxX: maxX + 200, maxY: maxY + 200 },
   };
 }
@@ -230,4 +313,10 @@ export function gridSlot(track, slot) {
 /** 점 번호 a 에서 b 까지 앞으로 몇 칸인지 (한 바퀴 돌아오는 것 고려) */
 export function forwardDist(track, a, b) {
   return (b - a + track.n) % track.n;
+}
+
+/** 점 i 가 바람 구간이면 그 구간 */
+export function windAt(track, i) {
+  for (const w of track.wind) if (forwardDist(track, w.i0, i) <= forwardDist(track, w.i0, w.i1)) return w;
+  return null;
 }

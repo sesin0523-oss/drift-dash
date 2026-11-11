@@ -88,7 +88,10 @@ export class Bot {
     da = Math.atan2(Math.sin(da), Math.cos(da));
 
     // 실수(흔들림): 쉬운 봇일수록 크다
-    this.noise += (Math.random() - 0.5) * L.noise * 3 * dt * 10;
+    // 먹물을 맞으면 앞이 안 보여서 크게 흔들린다
+    if (this.inkT > 0) this.inkT -= dt;
+    const blur = this.inkT > 0 ? 0.6 : 0;
+    this.noise += (Math.random() - 0.5) * (L.noise + blur) * 3 * dt * 10;
     this.noise *= 0.92;
     const steer = Math.max(-1, Math.min(1, da * 2.8 + this.noise));
     this.lastSteer = steer;
@@ -134,7 +137,12 @@ export class Bot {
       (k === 'banana' && (info.behindClose || this.itemHeld > 5)) ||
       (k === 'missile' && info.aheadId) ||
       (k === 'shield' && (info.incomingMissile || this.itemHeld > 7)) ||
-      (k === 'boost' && (info.curve ?? 1) < 0.25);
+      (k === 'boost' && (info.curve ?? 1) < 0.25) ||
+      (k === 'boost3' && (info.curve ?? 1) < 0.25) ||
+      (k === 'oil' && (info.behindClose || this.itemHeld > 5)) ||
+      ((k === 'zap' || k === 'ink') && info.place > 0) ||
+      (k === 'magnet' && info.aheadId) ||
+      (k === 'cloak' && (info.incomingMissile || this.itemHeld > 6));
     if (use || this.itemHeld > 9) {
       it.use(this.car, now, info.aheadId);
       this.itemHeld = 0;

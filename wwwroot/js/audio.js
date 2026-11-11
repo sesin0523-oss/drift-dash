@@ -150,6 +150,15 @@ export class Sound {
       case 'shield': seq([523, 784, 1047], 60, 'sine', 0.2); break;
       case 'shieldPop': seq([1047, 523], 80, 'sine', 0.22); break;
       case 'explode': this.bump(600); this.boost(); break;
+      case 'oil': seq([220, 160, 120], 60, 'sine', 0.22); break;
+      case 'zap': seq([1800, 900, 1800, 900], 35, 'sawtooth', 0.1); break;
+      case 'zapHit': seq([1400, 700, 1400], 30, 'sawtooth', 0.12); this.bump(300); break;
+      case 'ink': seq([400, 300], 60, 'triangle', 0.2); break;
+      case 'splat': seq([180, 120], 90, 'sine', 0.3); break;
+      case 'magnet': seq([300, 450, 600, 750], 50, 'sine', 0.18); break;
+      case 'cloak': seq([1047, 1319, 1568], 70, 'triangle', 0.15); break;
+      case 'splash': this.bump(500); seq([700, 500, 300, 200], 60, 'sine', 0.2); break;
+      case 'lava': this.bump(700); seq([200, 150, 100], 90, 'sawtooth', 0.15); break;
     }
   }
 

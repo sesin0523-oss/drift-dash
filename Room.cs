@@ -300,10 +300,19 @@ public sealed class Room
                 // 아이템전: 상자 먹음 / 바나나·미사일 생성 / 맞음 → 다른 사람들에게 그대로 중계
                 case "box" or "obj" or "objHit" when racing && _mode == "item":
                 {
-                    if (type == "obj" && (string?)m["kind"] is not ("banana" or "missile")) break;
+                    if (type == "obj" && (string?)m["kind"] is not ("banana" or "missile" or "oil")) break;
                     m["id"] = actor;
                     m.Remove("as");
                     RelayLocked(c, m.ToJsonString());
+                    break;
+                }
+
+                // 아이템전: 모두에게 영향을 주는 아이템(전기 충격·먹물). 맞았는지는 받은 사람이 자기 차로 판정
+                case "fx" when racing && _mode == "item":
+                {
+                    string? kind = (string?)m["kind"];
+                    if (kind is not ("zap" or "ink")) break;
+                    RelayLocked(c, JsonSerializer.Serialize(new { t = "fx", id = actor, kind }));
                     break;
                 }
 

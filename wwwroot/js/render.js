@@ -7,6 +7,7 @@ import { drawCarArt, PRESET_LOOKS } from './carart.js';
 export const COLORS = ['#ff5a4f', '#3d8bff', '#ffc531', '#34c77b', '#b46cff', '#ff8ad0',
                        '#ff9a3d', '#2fd0d0', '#9be15d', '#f5f5f5', '#8a8fff', '#c4a27a'];
 export const TEAM_COLORS = ['#ff4b4b', '#3d8bff'];
+const forwardIdx = (track, a, b) => (b - a + track.n) % track.n;
 export const TEAM_NAMES = ['레드', '블루'];
 
 const FONT = '"Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
@@ -152,19 +153,39 @@ export class Renderer {
     ctx.lineCap = 'round';
     const W = track.width;
     // 타이어 방벽 → 갓길 → 연석 → 도로 순으로 굵은 선을 겹쳐 그림
-    ctx.strokeStyle = '#2b2b2b';
-    ctx.lineWidth = W + SHOULDER * 2 + 22;
-    ctx.stroke(track.path);
-    ctx.strokeStyle = '#f2f2f2';
-    ctx.setLineDash([18, 18]);
-    ctx.lineWidth = W + SHOULDER * 2 + 22;
-    ctx.globalAlpha = 0.35;
-    ctx.stroke(track.path);
-    ctx.globalAlpha = 1;
-    ctx.setLineDash([]);
+    if (track.zapWalls) {
+      // 네온 시티: 번쩍이는 전기 방벽
+      const glow = 0.55 + 0.45 * Math.sin(t * 6);
+      ctx.strokeStyle = '#11131a';
+      ctx.lineWidth = W + SHOULDER * 2 + 26;
+      ctx.stroke(track.path);
+      ctx.strokeStyle = `rgba(0,229,255,${0.5 + 0.4 * glow})`;
+      ctx.setLineDash([22, 10]);
+      ctx.lineWidth = W + SHOULDER * 2 + 22;
+      ctx.stroke(track.path);
+      ctx.strokeStyle = `rgba(255,60,200,${0.35 + 0.35 * (1 - glow)})`;
+      ctx.lineDashOffset = 16;
+      ctx.stroke(track.path);
+      ctx.lineDashOffset = 0;
+      ctx.setLineDash([]);
+    } else {
+      ctx.strokeStyle = '#2b2b2b';
+      ctx.lineWidth = W + SHOULDER * 2 + 22;
+      ctx.stroke(track.path);
+      ctx.strokeStyle = '#f2f2f2';
+      ctx.setLineDash([18, 18]);
+      ctx.lineWidth = W + SHOULDER * 2 + 22;
+      ctx.globalAlpha = 0.35;
+      ctx.stroke(track.path);
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+    }
     ctx.strokeStyle = track.def.grass[0];
     ctx.lineWidth = W + SHOULDER * 2;
     ctx.stroke(track.path);
+
+    // 용암·바다 (그 구간엔 벽이 없음)
+    for (const h of track.hazards) this.drawHazard(h, t);
 
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = W + 18;
@@ -185,6 +206,9 @@ export class Renderer {
 
     this.drawStartLine(track);
     this.drawBoosts(track, t);
+    this.drawPatches(track, t);
+    this.drawWind(track, t);
+    this.drawObstacles(track, t);
 
     // 스키드 자국
     ctx.strokeStyle = 'rgba(20,20,20,0.28)';
@@ -217,7 +241,27 @@ export class Renderer {
       ctx.stroke();
     }
 
-    for (const c of cars) this.drawCar(c, COLORS[c.color % COLORS.length]);
+    for (const c of cars) {
+      // 투명 망토는 반투명, 견인 중엔 깜빡임
+      const towing = c.towing || c.towingRemote;
+      const ghostly = c.ghostly || c.ghost > 0;
+      if (towing) ctx.globalAlpha = Math.floor(t * 8) % 2 ? 0.15 : 0.55;
+      else if (ghostly) ctx.globalAlpha = 0.35;
+      this.drawCar(c, COLORS[c.color % COLORS.length]);
+      ctx.globalAlpha = 1;
+      // 감전: 차 주위로 번개
+      if (c.zap > 0 || c.zapped) {
+        ctx.strokeStyle = Math.random() < 0.5 ? '#fff36b' : '#8fe8ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let k = 0; k < 3; k++) {
+          let a = Math.random() * Math.PI * 2, r = 14;
+          ctx.moveTo(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r);
+          for (let s = 0; s < 3; s++) { a += (Math.random() - 0.5) * 1.2; r += 7; ctx.lineTo(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r); }
+        }
+        ctx.stroke();
+      }
+    }
 
     // 보호막
     for (const c of cars) {
@@ -253,6 +297,135 @@ export class Renderer {
       ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.fillText(name, c.x, c.y - 29);
+    }
+  }
+
+  // ───────────────────────── 트랙 특색 그리기 ─────────────────────────
+
+  drawHazard(h, t) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.clip(h.shape);
+    if (h.kind === 'lava') {
+      ctx.fillStyle = '#7a1606';
+      ctx.fill(h.shape);
+      // 출렁이는 용암 무늬
+      const g = ctx.createLinearGradient(0, 0, 400, 400);
+      const k = (t * 0.25) % 1;
+      g.addColorStop(0, '#ff4d00');
+      g.addColorStop((k + 0.33) % 1, '#ffb000');
+      g.addColorStop(1, '#ff2a00');
+      ctx.globalAlpha = 0.55 + 0.25 * Math.sin(t * 3);
+      ctx.fillStyle = g;
+      ctx.fill(h.shape);
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 10;
+      ctx.strokeStyle = 'rgba(255,220,120,0.6)';
+      ctx.setLineDash([6, 30]);
+      ctx.lineDashOffset = -t * 40;
+      ctx.stroke(h.shape);
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+    } else {
+      ctx.fillStyle = '#1e6fa8';
+      ctx.fill(h.shape);
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.setLineDash([20, 26]);
+      ctx.lineDashOffset = -t * 30;
+      ctx.stroke(h.shape);
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+    }
+    ctx.restore();
+  }
+
+  drawPatches(track, t) {
+    const { ctx } = this;
+    for (const p of track.patches) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      if (p.kind === 'ice') {
+        ctx.fillStyle = 'rgba(190,235,255,0.75)';
+        ctx.beginPath(); ctx.ellipse(0, 0, p.r * 1.25, p.r * 0.85, p.a, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-p.r * 0.6, -6); ctx.lineTo(p.r * 0.3, 8); ctx.moveTo(-4, -p.r * 0.5); ctx.lineTo(10, -2); ctx.stroke();
+      } else if (p.kind === 'snow') {
+        ctx.fillStyle = '#f7fbff';
+        for (const [dx, dy, r] of [[0, 0, 1], [-0.5, 0.3, 0.7], [0.5, -0.3, 0.75], [0.2, 0.5, 0.6]]) {
+          ctx.beginPath(); ctx.arc(dx * p.r, dy * p.r, r * p.r * 0.6, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.strokeStyle = 'rgba(150,180,210,0.6)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(0, 0, p.r * 0.6, 0, Math.PI * 2); ctx.stroke();
+      } else {   // mud
+        ctx.fillStyle = '#5b3d22';
+        ctx.beginPath(); ctx.ellipse(0, 0, p.r * 1.2, p.r * 0.85, p.a + 0.4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(140,100,60,0.7)';
+        ctx.beginPath(); ctx.ellipse(p.r * 0.2, -p.r * 0.15, p.r * 0.45, p.r * 0.25, 0, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  drawObstacles(track, t) {
+    const { ctx } = this;
+    for (const o of track.obstacles) {
+      ctx.save();
+      ctx.translate(o.x, o.y);
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath(); ctx.arc(4, 5, o.r, 0, Math.PI * 2); ctx.fill();
+      if (o.kind === 'bumper') {
+        const pulse = 1 + 0.08 * Math.sin(t * 8);
+        ctx.fillStyle = '#ff3d7f';
+        ctx.beginPath(); ctx.arc(0, 0, o.r * pulse + 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffe14d';
+        ctx.beginPath(); ctx.arc(0, 0, o.r * pulse, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ff3d7f';
+        ctx.beginPath(); ctx.arc(0, 0, o.r * 0.45, 0, Math.PI * 2); ctx.fill();
+      } else if (o.kind === 'log') {
+        ctx.rotate(o.a + Math.PI / 2);
+        ctx.fillStyle = '#6b4423';
+        ctx.beginPath(); ctx.roundRect(-o.r * 2.4, -o.r * 0.75, o.r * 4.8, o.r * 1.5, o.r * 0.7); ctx.fill();
+        ctx.fillStyle = '#c9a26b';
+        ctx.beginPath(); ctx.ellipse(o.r * 2.3, 0, o.r * 0.35, o.r * 0.7, 0, 0, Math.PI * 2); ctx.fill();
+      } else {   // rock
+        ctx.fillStyle = '#7d736a';
+        ctx.beginPath();
+        for (let k = 0; k < 7; k++) {
+          const a = (k / 7) * Math.PI * 2, r = o.r * (0.85 + 0.2 * Math.sin(k * 2.3));
+          k ? ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+        }
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.beginPath(); ctx.arc(-o.r * 0.3, -o.r * 0.3, o.r * 0.35, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  /** 제트 바람: 지금 미는 방향으로 흐르는 화살표 */
+  drawWind(track, t) {
+    const { ctx } = this;
+    const rt = this.raceTime ?? t;   // 차 물리와 같은 시계(레이스 시간)로 방향 계산
+    for (const w of track.wind) {
+      const f = Math.sin((rt * Math.PI * 2) / w.period);
+      if (Math.abs(f) < 0.15) continue;
+      ctx.strokeStyle = `rgba(220,240,255,${Math.abs(f) * 0.6})`;
+      ctx.lineWidth = 4;
+      for (let i = w.i0; i !== w.i1; i = (i + 18) % track.n) {
+        const p = track.pts[i];
+        for (const lat of [-0.3, 0, 0.3]) {
+          const off = ((t * 2 + i * 0.01) % 1) * 30 * Math.sign(f);
+          const x = p.x + p.nx * (lat * track.width + off), y = p.y + p.ny * (lat * track.width + off);
+          const dx = p.nx * Math.sign(f) * 14, dy = p.ny * Math.sign(f) * 14;
+          ctx.beginPath();
+          ctx.moveTo(x - dx - p.tx * 8, y - dy - p.ty * 8); ctx.lineTo(x, y); ctx.lineTo(x - dx + p.tx * 8, y - dy + p.ty * 8);
+          ctx.stroke();
+        }
+        if (forwardIdx(track, i, w.i1) < 18) break;
+      }
     }
   }
 

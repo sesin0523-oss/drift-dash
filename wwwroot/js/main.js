@@ -10,7 +10,7 @@ import { Net, RemoteCar } from './net.js';
 import { Renderer, COLORS, TEAM_COLORS, TEAM_NAMES, fmtTime } from './render.js';
 import { Sound } from './audio.js';
 import { Chat } from './chat.js';
-import { Items, drawIcon, ITEM_NAMES } from './items.js';
+import { Items, drawIcon, ITEM_NAMES, ITEM_HELP } from './items.js';
 import { Bot, BOT_LEVELS } from './bot.js';
 import { Podium } from './podium.js';
 
@@ -330,6 +330,52 @@ function spinBot(bot, from, why, side = Math.random() < 0.5 ? -1 : 1, power = 42
   bot.car.shieldPopped = false;
 }
 
+/** 보호막이 있으면 한 번 막고 true */
+function blockedByShield(car, isMe) {
+  if (car.shield <= 0) return false;
+  car.shield = 0;
+  if (isMe) { showBanner('보호막이 막았어요!', 1200, '#7cc4ff'); sound.sfx('shieldPop'); }
+  return true;
+}
+
+/** 기름을 밟음: 1.1초 동안 미끄러지고 속도가 조금 줄어듦 */
+function slideCar(car, isMe) {
+  if (!car || car.finished || car.ghostly || blockedByShield(car, isMe)) return;
+  car.slide = 1.1;
+  car.vx *= 0.8; car.vy *= 0.8;
+  if (isMe) { showBanner('기름에 미끄러졌어요!', 1200, '#b28cff'); sound.sfx('oil'); renderer.shake = 8; }
+}
+
+/**
+ * 모두에게 영향을 주는 아이템이 쓰임 (m.id = 쓴 차, m.kind = zap|ink).
+ * 이 브라우저가 맡은 차(내 차 + 내가 방장이면 봇들)에게만 적용 — 각자 자기 차를 판정하는 원칙 그대로.
+ */
+function applyFx(m) {
+  if (!race) return;
+  const st = standings();
+  const rank = (id) => st.findIndex((s) => s.id === id);
+  const victims = [];
+  if (race.car && m.id !== me) victims.push({ id: me, car: race.car, isMe: true });
+  for (const b of race.bots) if (b.id !== m.id) victims.push({ id: b.id, car: b.car, bot: b });
+
+  const from = playerOf(m.id)?.name ?? '?';
+  race.feed.push({ text: m.kind === 'zap' ? `${from}의 전기 충격!` : `${from}의 먹물!`, until: performance.now() + 3000, mine: m.id === me });
+
+  for (const v of victims) {
+    const c = v.car;
+    if (c.finished || c.ghostly || sameTeam(v.id, m.id)) continue;
+    if (m.kind === 'zap') {
+      if (blockedByShield(c, v.isMe)) continue;
+      c.zap = 1.5;
+      if (v.isMe) { showBanner('감전! 잠깐 느려져요', 1300, '#ffe14d'); renderer.shake = 10; sound.sfx('zapHit'); }
+    } else if (m.kind === 'ink' && rank(v.id) >= 0 && rank(v.id) < rank(m.id)) {   // 나보다 앞선 차만
+      if (v.isMe) { race.inkUntil = performance.now() + 3500; race.inkSeed = Math.random(); sound.sfx('splat'); }
+      else v.bot.inkT = 3;
+    }
+  }
+}
+net.on('fx', (m) => applyFx(m));
+
 // 누가 뒤 모서리를 박았다 (목표가 내 봇이면 봇을, 아니면 나를)
 net.on('hit', (m) => {
   const bot = race?.bots.find((b) => b.id === m.target);
@@ -564,7 +610,8 @@ function renderLobby() {
   const sText = seriesText(roster.series, roster.teams);
   $('seriesStatus').classList.toggle('hidden', !sText);
   $('seriesStatus').textContent = sText;
-  $('trackDesc').textContent = TRACKS[roster.track].desc + (roster.mode === 'item'
+  const feat = TRACKS[roster.track].features?.note;
+  $('trackDesc').textContent = TRACKS[roster.track].desc + (feat ? ` · 특징: ${feat}` : '') + (roster.mode === 'item'
     ? ' · 아이템전: ? 상자를 먹고 Shift/E 로 사용'
     : '') + (roster.teams ? ' · 팀전: 순위 점수(1위 10, 2위 8, 3위 6…)의 합으로 승부' : '');
   renderRecords();
@@ -765,6 +812,8 @@ function startRace(m) {
       race.items = new Items(track, me, {
         send: (msg) => { net.send(msg); deliverLocal(msg, me); },
         hitMe: (from, why) => spinMe(from, why),
+        slideMe: () => slideCar(race.car, true),
+        fx: (msg) => { net.send({ t: 'fx', ...msg }); applyFx({ ...msg, id: me }); },
         sfx: (name) => sound.sfx(name),
         banner: (text, color) => showBanner(text, 1400, color),
         sameTeam: (owner) => sameTeam(owner, me),
@@ -774,6 +823,8 @@ function startRace(m) {
       bot.items = new Items(track, bot.id, {
         send: (msg) => { net.send({ ...msg, as: bot.id }); deliverLocal(msg, bot.id); },
         hitMe: (from, why) => spinBot(bot, from, why),
+        slideMe: () => slideCar(bot.car, false),
+        fx: (msg) => { net.send({ t: 'fx', ...msg, as: bot.id }); applyFx({ ...msg, id: bot.id }); },
         sfx: () => {},
         banner: () => {},
         sameTeam: (owner) => sameTeam(owner, bot.id),
@@ -884,8 +935,39 @@ function carState(c, now) {
     t: 'st', ts: Math.round(now),
     x: r1(c.x), y: r1(c.y), a: Math.round(c.a * 1000) / 1000, vx: r1(c.vx), vy: r1(c.vy),
     d: c.drifting, b: c.boost > 0, sp: c.spin > 0, sh: c.shield > 0,
+    gh: c.ghostly, tw: c.towing, zp: c.zap > 0,
     p: c.progress(race.track), lap: c.lap, fin: c.finished,
   };
+}
+
+/** 자석: 쓴 차가 앞 차 쪽으로 끌려가도록 (800px 안에 있을 때) */
+function magnetPull(c, cars) {
+  if (!(c.magnetT > 0)) return null;
+  c.magnetT -= DT;
+  const tgt = cars.get(c.magnetTarget);
+  if (!tgt || tgt.finished || Math.hypot(tgt.x - c.x, tgt.y - c.y) > 800) return null;
+  return { x: tgt.x, y: tgt.y };
+}
+
+/** 빠지거나(용암·바다) 감전되면 효과 */
+function trackFx(c, isMe) {
+  if (c.fell) {
+    const lava = c.fell.kind === 'lava';
+    for (let i = 0; i < 26; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 80 + Math.random() * 260;
+      renderer.puff(c.fell.x, c.fell.y, lava ? (Math.random() < 0.5 ? 'rgba(255,120,20,' : 'rgba(255,210,60,') : 'rgba(200,235,255,',
+        5 + Math.random() * 6, Math.cos(a) * sp, Math.sin(a) * sp, 0.6);
+    }
+    if (isMe) {
+      showBanner(lava ? '용암에 빠졌어요! 견인 중…' : '바다에 빠졌어요! 견인 중…', 1500, lava ? '#ff7a2e' : '#7cc4ff');
+      sound.sfx(lava ? 'lava' : 'splash');
+      renderer.shake = 12;
+    }
+  }
+  if (c.zapHit) {
+    renderer.sparks(c.x, c.y, 10);
+    if (isMe) sound.sfx('zapHit');
+  }
 }
 
 // ───────────────────────── 매 프레임 ─────────────────────────
@@ -907,8 +989,10 @@ function stepRace() {
   const canDrive = t >= 0 && !car.finished;
   const input = canDrive ? readInput() : { throttle: false, brake: car.finished && car.speed > 30, steer: 0, handbrake: false };
   input.draft = canDrive && isDrafting(car, me, cars);
+  input.pull = canDrive ? magnetPull(car, cars) : null;
   const prev = { x: car.x, y: car.y, a: car.a };
   car.step(input, DT, race.track, car.finished ? [] : collidables(me, cars), Math.max(0, t));
+  trackFx(car, true);
   gainTeamGauge(race, car);
   if (race.sendTick % 30 === 0) flushTeamGauge(race, null);
 
@@ -980,7 +1064,9 @@ function stepBots(t, now, cars, st) {
       ? bot.think(DT, others)
       : { throttle: false, brake: c.finished && c.speed > 30, steer: 0, handbrake: false };
     input.draft = t >= 0 && !c.finished && isDrafting(c, bot.id, cars);
+    input.pull = t >= 0 && !c.finished ? magnetPull(c, cars) : null;
     c.step(input, DT, race.track, others, Math.max(0, t));
+    trackFx(c, false);
     gainTeamGauge(bot, c);
     if (bot.sendTick % 30 === 0) flushTeamGauge(bot, bot.id);
 
@@ -1010,6 +1096,7 @@ function stepBots(t, now, cars, st) {
         && (o.x - c.x) * fx + (o.y - c.y) * fy < 0 && Math.hypot(o.x - c.x, o.y - c.y) < 250);
       bot.thinkItem(DT, performance.now(), {
         behindClose, aheadId: aheadTarget(bot.id, st), incomingMissile: !!bot.items.incomingMissile, curve: input.curve,
+        place: placeOf(bot.id, st),
       });
     }
 
@@ -1171,12 +1258,37 @@ function draw(time) {
     if (race.specId == null && id != null) { race.specId = id; updateSpecBar(); }
   }
   renderer.follow(target, DT);
+  renderer.raceTime = Math.max(0, raceTime()) / 1000;   // 바람 방향을 차 물리와 같은 시계로
   renderer.drawWorld(race.track, cars, nameOf, t, (ctx) => {
     // 아이템 상자·바나나·미사일 (판정기들은 같은 이벤트를 받으므로 하나만 그리면 됨)
     (race.items ?? localItems()[0])?.draw(ctx, t, performance.now());
     drawGhost(ctx);
   });
+  drawInk();
   drawHud(st, cars);
+}
+
+/** 먹물: 앞 차가 쓴 먹물을 맞으면 화면 가운데가 3.5초 동안 얼룩짐 (마지막 1초에 서서히 걷힘) */
+function drawInk() {
+  const left = (race.inkUntil ?? 0) - performance.now();
+  if (left <= 0 || spectating()) return;
+  const R = renderer, ctx = R.ctx;
+  const alpha = Math.min(1, left / 1000) * 0.92;
+  let seed = race.inkSeed * 1000;
+  const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#14101e';
+  for (let i = 0; i < 9; i++) {
+    const x = R.w * (0.25 + rnd() * 0.5), y = R.h * (0.25 + rnd() * 0.5), r = Math.min(R.w, R.h) * (0.08 + rnd() * 0.12);
+    ctx.beginPath();
+    for (let k = 0; k <= 16; k++) {
+      const a = (k / 16) * Math.PI * 2, rr = r * (0.75 + 0.35 * Math.sin(a * 3 + i));
+      k ? ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function ghostPose() {
@@ -1369,8 +1481,11 @@ function drawItemSlot(R, s) {
   const kind = items.rolling ? kinds[Math.floor(now / 70) % kinds.length] : items.slot;
   if (kind) drawIcon(ctx, kind, x + size / 2, y + size / 2, size * 0.7, now / 1000);
   const key = touch.active ? '' : '  [Shift/E]';
-  const label = items.rolling ? '뽑는 중...' : items.slot ? `${ITEM_NAMES[items.slot]}${key}` : '? 상자를 먹으세요';
-  R.text(label, x + size + 10, y + size / 2 + 6, 15 * s, items.slot ? '#ffffff' : '#cfd3da', 'left', '700');
+  const count = items.slot === 'boost3' && items.charges > 0 ? ` (${items.charges})` : '';
+  const label = items.rolling ? '뽑는 중...' : items.slot ? `${ITEM_NAMES[items.slot]}${count}${key}` : '? 상자를 먹으세요';
+  R.text(label, x + size + 10, y + size / 2 + (items.slot && !items.rolling ? -2 : 6), 15 * s, items.slot ? '#ffffff' : '#cfd3da', 'left', '700');
+  if (items.slot && !items.rolling && ITEM_HELP[items.slot])
+    R.text(ITEM_HELP[items.slot], x + size + 10, y + size / 2 + 18 * s, 12 * s, '#cfd3da', 'left', '600');
 
   if (items.incomingMissile && Math.floor(now / 150) % 2 === 0)
     R.text('⚠ 미사일 접근!  보호막이 있으면 쓰세요', R.w / 2, R.h * 0.2, 22 * s, '#ff5a4f', 'center', '900');

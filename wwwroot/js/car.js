@@ -2,7 +2,7 @@
 // 속도를 "앞 방향 성분"과 "옆 방향 성분"으로 나눠서,
 // 옆 성분을 빨리 없애면 접지력이 좋은 차, 천천히 없애면 미끄러지는(드리프트) 차가 된다.
 
-import { nearest, forwardDist, gridSlot, SHOULDER } from './track.js';
+import { nearest, forwardDist, gridSlot, windAt, SHOULDER } from './track.js';
 
 export const CAR = {
   length: 38, width: 20, radius: 17,
@@ -139,13 +139,34 @@ export class Car {
     this.hits = [];           // 이번 프레임에 내가 상대 뒤 모서리를 박은 기록 → 서버로
     this.shield = 0;          // 보호막 남은 시간 (아이템전)
     this.shieldPopped = false;
+    this.towT = 0;            // 용암·바다에 빠져 견인 중 (조작 불가)
+    this.fell = null;         // 이번 프레임에 빠졌으면 { kind, x, y } (효과용)
+    this.ghost = 0;           // 투명 망토 / 견인 직후: 차·아이템에 안 부딪힘
+    this.zap = 0;             // 감전: 느려짐
+    this.zapHit = false;      // 이번 프레임에 전기 벽에 닿음 (효과용)
+    this.slide = 0;           // 기름: 핸들이 거의 안 먹음
+    this.surface = null;      // 지금 밟고 있는 노면 (mud/snow/ice)
   }
 
   get shielded() { return this.shield > 0; }
+  get ghostly() { return this.ghost > 0 || this.towT > 0; }
+  get towing() { return this.towT > 0; }
+
+  /** 용암·바다에 빠짐 → 조금 뒤 도로 한가운데로 견인, 잠깐 조작 불가 */
+  fall(track, kind) {
+    this.fell = { kind, x: this.x, y: this.y };
+    const i = (this.hint - 12 + track.n) % track.n, p = track.pts[i];
+    this.x = p.x; this.y = p.y; this.a = Math.atan2(p.ty, p.tx);
+    this.vx = this.vy = 0;
+    this.hint = i; this.lat = 0; this.offroad = false;
+    this.towT = 1.5;
+    this.ghost = this.towT + 1.2;     // 다시 출발한 직후 잠깐은 부딪히지 않음
+    this.boost = 0; this.spin = 0; this.slide = 0; this.driftCharge = 0;
+  }
 
   /** 상대가 내 뒤 모서리를 박았을 때. side: 맞은 쪽(-1/1), power: 박은 속도 */
   applySpin(side, power) {
-    if (this.spin > 0 || this.immune > 0 || this.finished) return false;
+    if (this.spin > 0 || this.immune > 0 || this.finished || this.ghostly) return false;
     if (power < this.spec.spinMinSpeed) return false;   // 탱크는 웬만큼 세게 박아야 돎
     if (this.shield > 0) {           // 보호막이 한 번 막아 줌
       this.shield = 0;
@@ -170,6 +191,25 @@ export class Car {
    */
   step(input, dt, track, others, raceTimeMs) {
     const S = this.spec;   // 이 차 종류의 능력치
+    this.fell = null;
+    this.zapHit = false;
+    if (this.ghost > 0) this.ghost -= dt;
+    if (this.zap > 0) this.zap -= dt;
+    if (this.slide > 0) this.slide -= dt;
+    // 견인 중: 제자리에서 기다림
+    if (this.towT > 0) {
+      this.towT -= dt;
+      this.vx = this.vy = 0;
+      this.drifting = false;
+      this.hits.length = 0;
+      return;
+    }
+
+    // 노면 (진흙·눈 더미·빙판)
+    this.surface = null;
+    for (const p of track.patches) if ((this.x - p.x) ** 2 + (this.y - p.y) ** 2 < p.r * p.r) this.surface = p.kind;
+    const surfSpeed = this.surface === 'mud' ? 0.5 : this.surface === 'snow' ? 0.6 : 1;
+
     // 스핀 중: 조작 불가, 빙글빙글 돌며 미끄러짐
     if (this.immune > 0) this.immune -= dt;
     if (this.shield > 0) this.shield -= dt;
@@ -191,7 +231,8 @@ export class Car {
     // 팀 슬립스트림: 팀원 바로 뒤에 붙으면 바람을 덜 받아 최고 속도 +8%, 가속 +25%
     this.drafting = !!input.draft && !this.offroad && this.boost <= 0;
     const draftMul = this.drafting ? 1.08 : 1;
-    const max = this.boost > 0 ? S.boostMax : this.offroad ? S.offroadMax : S.maxSpeed * draftMul;
+    const effMul = surfSpeed * (this.zap > 0 ? 0.55 : 1) * (input.pull ? 1.1 : 1);   // 노면·감전·자석
+    const max = (this.boost > 0 ? S.boostMax : this.offroad ? S.offroadMax : S.maxSpeed * draftMul) * effMul;
 
     // 가속 / 브레이크 / 후진 — 최고 속도에 닿으면 더 가속하지 않음
     if (input.throttle) {
@@ -213,8 +254,10 @@ export class Car {
     const dA = turn * dt;
     this.a += dA;
 
-    // 트랙 접지력 (눈길이면 0.7배 → 더 미끄러짐)
-    const gm = track.def.gripMul ?? 1;
+    // 트랙 접지력 (눈길이면 0.7배 → 더 미끄러짐) × 빙판·눈 더미·기름
+    const gm = (track.def.gripMul ?? 1)
+      * (this.surface === 'ice' ? 0.25 : this.surface === 'snow' ? 0.8 : 1)
+      * (this.slide > 0 ? 0.12 : 1);
 
     // 1) 속도를 바깥 좌표로 (차가 돌기 전 방향 기준)
     let wx = fx * vf + rx * vr, wy = fy * vf + ry * vr;
@@ -249,13 +292,49 @@ export class Car {
     this.vx = nfx * vf + -nfy * vr;
     this.vy = nfy * vf + nfx * vr;
 
+    // 자석: 앞 차 쪽으로 끌려감
+    if (input.pull) {
+      const dx = input.pull.x - this.x, dy = input.pull.y - this.y, d = Math.hypot(dx, dy) || 1;
+      this.vx += (dx / d) * 340 * dt;
+      this.vy += (dy / d) * 340 * dt;
+    }
+    // 바람: 도로 옆 방향으로 밀었다 당겼다
+    const w = track.wind.length ? windAt(track, this.hint) : null;
+    if (w) {
+      const p = track.pts[this.hint], f = w.force * Math.sin(((raceTimeMs / 1000) * Math.PI * 2) / w.period);
+      this.vx += p.nx * f * dt;
+      this.vy += p.ny * f * dt;
+    }
+
     this.x += this.vx * dt;
     this.y += this.vy * dt;
 
     this.collideOthers(others);
     this.collideTrack(track);
+    if (this.towT > 0) return;   // 방금 빠짐
+    this.collideObstacles(track);
     this.checkPads(track);
     this.checkLap(track, raceTimeMs);
+  }
+
+  /** 바위·통나무(막힘), 범퍼(세게 튕김) */
+  collideObstacles(track) {
+    for (const o of track.obstacles) {
+      const dx = this.x - o.x, dy = this.y - o.y, d = Math.hypot(dx, dy), min = o.r + 13;
+      if (d >= min || d < 0.01) continue;
+      const nx = dx / d, ny = dy / d;
+      this.x = o.x + nx * min;
+      this.y = o.y + ny * min;
+      const vn = this.vx * nx + this.vy * ny;
+      if (vn < 0) {
+        const bounce = o.kind === 'bumper' ? 2.6 : 1.3;
+        this.vx -= nx * vn * bounce;
+        this.vy -= ny * vn * bounce;
+        if (o.kind === 'bumper') { this.vx += nx * 160; this.vy += ny * 160; }
+        else { this.vx *= 0.85; this.vy *= 0.85; }
+        this.bumped = Math.max(this.bumped, -vn + (o.kind === 'bumper' ? 200 : 0));
+      }
+    }
   }
 
   collideTrack(track) {
@@ -263,6 +342,13 @@ export class Car {
     this.hint = near.i;
     this.lat = near.lat;
     this.offroad = Math.abs(near.lat) > track.half;
+
+    // 용암·바다 구간: 그쪽엔 벽이 없고, 도로를 벗어나면 빠짐
+    const hs = track.hazardSide[near.i];
+    if (hs && Math.sign(near.lat) === hs) {
+      if (Math.abs(near.lat) > track.half + 14) this.fall(track, track.hazardKind[near.i]);
+      return;
+    }
 
     // 벽: 도로 + 잔디 바깥
     const wall = track.half + SHOULDER;
@@ -279,6 +365,8 @@ export class Car {
         this.vy -= p.ny * side * vn * 1.4;
         this.vx *= 0.8; this.vy *= 0.8;
         this.bumped = Math.max(this.bumped, vn);
+        // 네온 시티: 전기 방벽에 감전
+        if (track.zapWalls && vn > 60) { this.zap = Math.max(this.zap, 0.7); this.zapHit = true; }
       }
     }
   }
@@ -291,7 +379,9 @@ export class Car {
    */
   collideOthers(others) {
     this.hits.length = 0;
+    if (this.ghostly) return;                 // 투명 망토·견인 직후: 통과
     for (const o of others) {
+      if (o.ghostly || o.ghost > 0) continue;
       const col = boxCollide(box(this), box(o));
       if (!col) continue;
 

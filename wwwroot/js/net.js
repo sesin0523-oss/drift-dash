@@ -128,7 +128,7 @@ export class RemoteCar {
       this.a += da * k;
     }
     this.vx = vx; this.vy = vy;
-    this.drifting = src.d; this.boosting = src.b; this.spinning = !!src.sp; this.shielded = !!src.sh;
+    this.drifting = src.d; this.boosting = src.b; this.spinning = !!src.sp; this.shielded = !!src.sh; this.ghostly = !!src.gh; this.towingRemote = !!src.tw; this.zapped = !!src.zp;
   }
 
   get speed() { return Math.hypot(this.vx, this.vy); }

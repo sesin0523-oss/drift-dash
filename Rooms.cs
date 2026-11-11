@@ -19,7 +19,8 @@ public sealed class Client
     public bool InRace;
     public Room? Room;
     public readonly Queue<long> ChatTimes = new();   // 도배 방지용 최근 채팅 시각
-    public int Car;          // 고른 차 종류 (0~3)
+    public int Car;          // 고른 차 종류 (0~3 기본 차, 4 커스텀)
+    public CustomCar? Custom; // 커스텀 차 (Car == 4 일 때)
     public int Team = -1;    // 팀전: 0 = 레드, 1 = 블루, -1 = 아직 안 정함
     public bool Spectate;    // 관전만 하기
 

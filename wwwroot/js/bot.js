@@ -105,7 +105,8 @@ export class Bot {
     let handbrake = false;
 
     // 어려운 봇: 급커브에서 드리프트 → 놓으면 미니 터보
-    if (L.drift && curve > 0.55 && speed > 380 && !brake) {
+    // (도로가 좁은 트랙에서는 미끄러지면 벽에 부딪히므로 드리프트 안 함)
+    if (L.drift && tr.width >= 145 && curve > 0.55 && speed > 380 && !brake) {
       this.driftHold = 0.9;
     }
     if (this.driftHold > 0) {

@@ -25,9 +25,10 @@ public sealed class Room
 {
     public const int MaxRacers = 6;            // 사람 + 봇
     public const int MaxConnections = 10;      // 관전자 포함
-    public const int TrackCount = 6;
+    public const int TrackCount = 9;
     private static readonly int[] PlacePoints = { 10, 8, 6, 5, 4, 3 };
-    private static readonly string[] TrackNames = { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로" };
+    private static readonly string[] TrackNames =
+        { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로", "화산 분지", "숲속 와인딩", "공항 활주로" };
     private const int TeamGaugeMax = 100;
     private static readonly string[] BotNames = { "봇 번개", "봇 터보", "봇 회오리", "봇 질주", "봇 스키드", "봇 니트로" };
     private static readonly string[] LevelNames = { "쉬움", "보통", "어려움" };
@@ -175,9 +176,17 @@ public sealed class Room
                 }
 
                 case "car" when lobby:
-                    c.Car = Math.Clamp((int?)m["car"] ?? 0, 0, 3);
+                {
+                    int car = Math.Clamp((int?)m["car"] ?? 0, 0, 4);
+                    if (car == 4)
+                    {
+                        c.Custom = CustomCar.Parse(m["custom"] as JsonObject);
+                        if (c.Custom == null) { car = 0; c.Send(new { t = "error", msg = "커스텀 차 설정이 올바르지 않아 기본 차로 바꿨어요." }); }
+                    }
+                    c.Car = car;
                     BroadcastRosterLocked();
                     break;
+                }
 
                 case "team" when lobby && _teams:
                     c.Team = Math.Clamp((int?)m["team"] ?? 0, 0, 1);
@@ -524,11 +533,13 @@ public sealed class Room
         {
             id = c.Id, name = c.Name, color = c.Color, inRace = c.InRace,
             car = c.Car, team = c.Team, spec = c.Spectate, bot = false, level = 0,
+            custom = c.Car == 4 ? c.Custom : null,
         });
         var bots = _bots.Select(b => (object)new
         {
             id = b.Id, name = b.Name, color = b.Color, inRace = b.InRace,
             car = b.Car, team = b.Team, spec = false, bot = true, level = b.Level,
+            custom = (CustomCar?)null,
         });
         Broadcast(new
         {

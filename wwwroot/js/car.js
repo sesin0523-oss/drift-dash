@@ -32,7 +32,40 @@ export const CAR_TYPES = [
     bars: { 속도: 2, 코너: 3, 드리프트: 1, 무게: 5 } },
 ];
 
-export const carSpec = (type) => ({ ...CAR, ...(CAR_TYPES[type] ?? CAR_TYPES[0]).stats });
+/** 커스텀 차: 능력치 4개(1~5)를 합계 12점 안에서 나눔. 3·3·3·3 이면 기본 차와 비슷 */
+export const CUSTOM_TYPE = 4;
+export const CUSTOM_BUDGET = 12;
+export const STAT_KEYS = ['speed', 'corner', 'drift', 'weight'];
+export const STAT_NAMES = { speed: '속도', corner: '코너', drift: '드리프트', weight: '무게' };
+
+export function customStats(st) {
+  const v = (k) => Math.max(1, Math.min(5, Math.round(st?.[k] ?? 3)));
+  return {
+    maxSpeed: 586 + 18 * v('speed'),          // 604 ~ 676
+    accel: 605 - 15 * v('speed'),             // 빠른 차일수록 가속은 조금 느림
+    steer: 2.6 + 0.18 * v('corner'),
+    grip: 7.4 + 0.6 * v('corner'),
+    driftGrip: 2.15 - 0.22 * v('drift'),      // 낮을수록 잘 미끄러짐
+    chargeRate: 0.7 + 0.18 * v('drift'),
+    mass: 0.6 + 0.15 * v('weight'),           // 0.75 ~ 1.35
+    spinMinSpeed: 110 + 20 * v('weight'),
+    spinTime: 1.15 - 0.08 * v('weight'),
+  };
+}
+
+/** 합계가 예산을 넘지 않게 맞춘 능력치 */
+export function clampStats(st) {
+  const out = {};
+  let total = 0;
+  for (const k of STAT_KEYS) { out[k] = Math.max(1, Math.min(5, Math.round(st?.[k] ?? 3))); total += out[k]; }
+  for (const k of [...STAT_KEYS].reverse()) while (total > CUSTOM_BUDGET && out[k] > 1) { out[k]--; total--; }
+  return out;
+}
+
+export const carSpec = (type, custom) =>
+  type === CUSTOM_TYPE && custom
+    ? { ...CAR, ...customStats(clampStats(custom.stats)) }
+    : { ...CAR, ...(CAR_TYPES[type] ?? CAR_TYPES[0]).stats };
 
 /** 회전된 직사각형(OBB): 중심, 앞 방향 축, 옆 방향 축, 반길이/반폭 */
 function box(c) {
@@ -79,9 +112,9 @@ export function boxCollide(A, B) {
 }
 
 export class Car {
-  constructor(track, slot, type = 0) {
+  constructor(track, slot, type = 0, custom = null) {
     this.type = type;
-    this.spec = carSpec(type);
+    this.spec = carSpec(type, custom);
     this.mass = this.spec.mass;
     const g = gridSlot(track, slot);
     this.x = g.x; this.y = g.y; this.a = g.a;

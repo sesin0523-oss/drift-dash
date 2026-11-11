@@ -14,7 +14,7 @@ public sealed class RecordStore
     public const int GhostHz = 10;          // 고스트는 초당 10번 위치 기록
 
     // 트랙 중심선 길이(px). 아무리 빨라도 (최고 부스트 속도 920px/s, 안쪽 라인 고려 0.75배) 이보다 빠를 순 없음
-    private static readonly int[] TrackLength = { 11232, 13488, 7096, 5720, 10280, 11540 };
+    private static readonly int[] TrackLength = { 11232, 13488, 7096, 5720, 10280, 11540, 6968, 7256, 8480 };
 
     private sealed class Entry
     {

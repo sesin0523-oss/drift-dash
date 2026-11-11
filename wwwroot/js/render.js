@@ -2,6 +2,7 @@
 
 import { SHOULDER } from './track.js';
 import { CAR } from './car.js';
+import { drawCarArt, PRESET_LOOKS } from './carart.js';
 
 export const COLORS = ['#ff5a4f', '#3d8bff', '#ffc531', '#34c77b', '#b46cff', '#ff8ad0',
                        '#ff9a3d', '#2fd0d0', '#9be15d', '#f5f5f5', '#8a8fff', '#c4a27a'];
@@ -309,56 +310,13 @@ export class Renderer {
     }
   }
 
+  /** c.look(커스텀 차 생김새)가 있으면 그것으로, 없으면 차 종류(c.type)의 기본 생김새로 */
   drawCar(c, color) {
     const { ctx } = this;
-    const L = CAR.length, Wd = CAR.width;
     ctx.save();
     ctx.translate(c.x, c.y);
     ctx.rotate(c.a);
-    // 그림자
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.roundRect(-L / 2 + 3, -Wd / 2 + 4, L, Wd, 6);
-    ctx.fill();
-    // 바퀴
-    ctx.fillStyle = '#151515';
-    for (const [x, y] of [[-12, -11], [-12, 11], [11, -11], [11, 11]]) ctx.fillRect(x - 5, y - 3, 10, 6);
-    // 차체
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.roundRect(-L / 2, -Wd / 2, L, Wd, 6);
-    ctx.fill();
-    // 차 종류별 모양
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    if (c.type === 2) {                       // 드리프트: 사선 줄무늬
-      for (let k = -2; k <= 2; k++) {
-        ctx.beginPath();
-        ctx.moveTo(k * 7 - 3, -Wd / 2); ctx.lineTo(k * 7 + 1, -Wd / 2);
-        ctx.lineTo(k * 7 + 5, Wd / 2); ctx.lineTo(k * 7 + 1, Wd / 2);
-        ctx.fill();
-      }
-    } else {
-      ctx.fillRect(-L / 2 + 2, -2.5, L - 4, 5);
-    }
-    if (c.type === 1) {                       // 스피드: 뒷날개
-      ctx.fillStyle = '#1b1b1b';
-      ctx.fillRect(-L / 2 - 3, -Wd / 2 - 1, 5, Wd + 2);
-    } else if (c.type === 3) {                // 탱크: 앞 범퍼 가드
-      ctx.fillStyle = '#2a2a2a';
-      ctx.fillRect(L / 2 - 1, -Wd / 2 - 1, 4, Wd + 2);
-      ctx.fillStyle = '#9aa0a8';
-      ctx.fillRect(L / 2, -Wd / 2 + 2, 2, Wd - 4);
-    }
-    // 앞유리 / 뒷유리
-    ctx.fillStyle = 'rgba(25,35,55,0.85)';
-    ctx.beginPath();
-    ctx.roundRect(2, -Wd / 2 + 3, 8, Wd - 6, 2);
-    ctx.fill();
-    ctx.fillRect(-12, -Wd / 2 + 4, 4, Wd - 8);
-    // 헤드라이트
-    ctx.fillStyle = '#fff6c4';
-    ctx.fillRect(L / 2 - 3, -Wd / 2 + 2, 3, 4);
-    ctx.fillRect(L / 2 - 3, Wd / 2 - 6, 3, 4);
+    drawCarArt(ctx, c.look ?? PRESET_LOOKS[c.type ?? 0] ?? PRESET_LOOKS[0], color);
     ctx.restore();
   }
 

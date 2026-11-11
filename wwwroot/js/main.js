@@ -3,7 +3,9 @@
 // 다른 사람의 차(사람·봇)는 서버가 중계한 위치를 보간해서 그린다.
 
 import { TRACKS, buildTrack } from './track.js';
-import { Car, CAR_TYPES, carSpec } from './car.js';
+import { Car, CAR_TYPES, carSpec, CUSTOM_TYPE, STAT_KEYS, STAT_NAMES } from './car.js';
+import { Garage, lookOf, drawPreview, MAX_CUSTOM } from './garage.js';
+import { PRESET_LOOKS } from './carart.js';
 import { Net, RemoteCar } from './net.js';
 import { Renderer, COLORS, TEAM_COLORS, TEAM_NAMES, fmtTime } from './render.js';
 import { Sound } from './audio.js';
@@ -29,7 +31,12 @@ if (roomCode.length < 3) {
   history.replaceState(null, '', `?room=${roomCode}`);
 }
 let myName = store.get('dd-name') || `드라이버${Math.floor(Math.random() * 90 + 10)}`;
-let myCar = Math.max(0, Math.min(CAR_TYPES.length - 1, +(store.get('dd-car') ?? 0) || 0));
+let myCar = Math.max(0, Math.min(CUSTOM_TYPE, +(store.get('dd-car') ?? 0) || 0));
+// 내가 만든 커스텀 차들 (최대 3대) + 그중 고른 것
+let customs = [];
+try { customs = (JSON.parse(store.get('dd-customs') || '[]') || []).slice(0, MAX_CUSTOM); } catch { customs = []; }
+let myCustomIdx = Math.max(0, Math.min(customs.length - 1, +(store.get('dd-custom-idx') ?? 0) || 0));
+if (myCar === CUSTOM_TYPE && !customs.length) myCar = 0;
 
 // ───────────────────────── 상태 ─────────────────────────
 
@@ -221,14 +228,51 @@ net.on('welcome', (m) => {
   me = m.you;
   roomCode = m.room;
   updateLink();
-  net.send({ t: 'car', car: myCar });
+  sendCar();
 });
 
+/** 고른 차를 서버에 알림 (커스텀이면 생김새·능력치까지) */
+function sendCar() {
+  if (myCar === CUSTOM_TYPE && customs[myCustomIdx]) net.send({ t: 'car', car: CUSTOM_TYPE, custom: customs[myCustomIdx] });
+  else net.send({ t: 'car', car: myCar });
+}
+
+function saveCustoms() {
+  store.set('dd-customs', JSON.stringify(customs));
+  store.set('dd-custom-idx', myCustomIdx);
+  store.set('dd-car', myCar);
+}
+
+const garage = new Garage({
+  save: (car, index) => {
+    if (index == null) { customs.push(car); index = customs.length - 1; }
+    else customs[index] = car;
+    myCar = CUSTOM_TYPE;
+    myCustomIdx = index;
+    saveCustoms();
+    sendCar();
+    renderCars();
+  },
+  remove: (index) => {
+    customs.splice(index, 1);
+    if (myCar === CUSTOM_TYPE) {
+      if (!customs.length) myCar = 0;
+      myCustomIdx = Math.max(0, Math.min(customs.length - 1, myCustomIdx));
+    }
+    saveCustoms();
+    sendCar();
+    renderCars();
+  },
+});
+
+let lastMyColor = null;
 net.on('roster', (m) => {
   roster = m;
   if (m.phase === 'lobby' && mode !== 'lobby') enterLobby();
   renderLobby();
   updateTeamChat();
+  const c = playerOf(me)?.color;
+  if (c !== lastMyColor) { lastMyColor = c; renderCars(); }   // 기본 차 그림은 내 색으로
 });
 
 // 팀 부스터 게이지
@@ -385,40 +429,65 @@ $('copy').addEventListener('click', async () => {
   setTimeout(() => ($('copy').textContent = '복사'), 1500);
 });
 
-// 차 고르기 카드
+// 차 고르기 카드: 기본 차 4종 + 내 커스텀 차들 + "차 만들기"
+function carCard({ name, desc, bars, look, selected, onPick, onEdit }) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'car-card' + (selected ? ' selected' : '');
+  const title = document.createElement('div');
+  title.className = 'car-name';
+  title.textContent = name;
+  const cv = document.createElement('canvas');
+  const d = document.createElement('div');
+  d.className = 'car-desc';
+  d.textContent = desc;
+  const barBox = document.createElement('div');
+  barBox.className = 'car-bars';
+  for (const [label, v] of Object.entries(bars)) {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = '<span></span><i><b></b></i>';
+    row.querySelector('span').textContent = label;
+    row.querySelector('b').style.width = `${v * 20}%`;
+    barBox.append(row);
+  }
+  b.append(title, cv, d, barBox);
+  if (onEdit) {
+    const e = document.createElement('div');
+    e.className = 'edit';
+    e.textContent = '고치기';
+    e.addEventListener('click', (ev) => { ev.stopPropagation(); onEdit(); });
+    b.append(e);
+  }
+  b.addEventListener('click', () => { if (roster.phase !== 'race') onPick(); });
+  // 카드가 화면에 붙은 뒤(크기를 알 수 있을 때) renderCars 가 그림
+  b.drawPreview = () => drawPreview(cv, look, look.color ?? COLORS[(playerOf(me)?.color ?? 0) % COLORS.length]);
+  return b;
+}
+
 function renderCars() {
   const box = $('cars');
   box.innerHTML = '';
-  CAR_TYPES.forEach((ct, i) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'car-card' + (i === myCar ? ' selected' : '');
-    const title = document.createElement('div');
-    title.className = 'car-name';
-    title.textContent = ct.name;
-    const desc = document.createElement('div');
-    desc.className = 'car-desc';
-    desc.textContent = ct.desc;
-    const bars = document.createElement('div');
-    bars.className = 'car-bars';
-    for (const [label, v] of Object.entries(ct.bars)) {
-      const row = document.createElement('div');
-      row.className = 'bar-row';
-      row.innerHTML = '<span></span><i><b></b></i>';
-      row.querySelector('span').textContent = label;
-      row.querySelector('b').style.width = `${v * 20}%`;
-      bars.append(row);
-    }
-    b.append(title, desc, bars);
-    b.addEventListener('click', () => {
-      if (roster.phase === 'race') return;
-      myCar = i;
-      store.set('dd-car', i);
-      net.send({ t: 'car', car: i });
-      renderCars();
-    });
-    box.append(b);
-  });
+  CAR_TYPES.forEach((ct, i) => box.append(carCard({
+    name: ct.name, desc: ct.desc, bars: ct.bars, look: PRESET_LOOKS[i], selected: myCar === i,
+    onPick: () => { myCar = i; saveCustoms(); sendCar(); renderCars(); },
+  })));
+  customs.forEach((cc, i) => box.append(carCard({
+    name: cc.name, desc: `커스텀 · ${['세단', '스포츠카', '드리프트카', '트럭'][cc.shape]}`,
+    bars: Object.fromEntries(STAT_KEYS.map((k) => [STAT_NAMES[k], cc.stats[k]])),
+    look: lookOf(cc), selected: myCar === CUSTOM_TYPE && myCustomIdx === i,
+    onPick: () => { myCar = CUSTOM_TYPE; myCustomIdx = i; saveCustoms(); sendCar(); renderCars(); },
+    onEdit: () => garage.open(cc, i),
+  })));
+  if (customs.length < MAX_CUSTOM) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'car-card add';
+    add.innerHTML = '<b>+</b><span>차 만들기</span>';
+    add.addEventListener('click', () => { if (roster.phase !== 'race') garage.open(null, null); });
+    box.append(add);
+  }
+  for (const card of box.children) card.drawPreview?.();
 }
 
 function shareBase() {
@@ -448,7 +517,7 @@ function renderLobby() {
     name.textContent = p.name;
     const carTag = document.createElement('span');
     carTag.className = 'car-tag';
-    carTag.textContent = CAR_TYPES[p.car]?.name ?? '';
+    carTag.textContent = p.car === CUSTOM_TYPE ? `${p.custom?.name ?? '커스텀'} (커스텀)` : CAR_TYPES[p.car]?.name ?? '';
     const tag = document.createElement('span');
     tag.className = 'tag';
     tag.textContent = [
@@ -535,7 +604,10 @@ function podiumData(m) {
   const S = m.series?.on ? m.series : null;
   const final = !!S?.over;
   const look = (id) => playerOf(id) ?? {};
-  const place = (id, name, sub) => ({ id, name, sub, color: COLORS[(look(id).color ?? 0) % COLORS.length], type: look(id).car ?? 0 });
+  const place = (id, name, sub) => ({
+    id, name, sub, color: COLORS[(look(id).color ?? 0) % COLORS.length], type: look(id).car ?? 0,
+    look: look(id).car === CUSTOM_TYPE ? lookOf(look(id).custom) : null,
+  });
 
   // 순위 목록: 시리즈 최종이면 (승수 → 점수), 단판이면 도착 순서
   const ranked = final
@@ -645,7 +717,7 @@ function makeRemote(id) {
   const r = new RemoteCar(id);
   const p = playerOf(id);
   r.type = p?.car ?? 0;
-  r.mass = carSpec(r.type).mass;
+  r.mass = carSpec(r.type, p?.custom).mass;
   r.team = race?.teams ? p?.team ?? -1 : -1;
   return r;
 }
@@ -657,7 +729,7 @@ function startRace(m) {
   race = {
     id: m.raceId, track, laps: m.laps, startAt: m.startAt, grid: m.grid, mode: m.mode, teams: !!m.teams,
     series: m.series,
-    car: slot >= 0 ? new Car(track, slot, myP?.car ?? myCar) : null,   // 경기 중에 들어왔거나 관전이면 null
+    car: slot >= 0 ? new Car(track, slot, myP?.car ?? myCar, myP?.custom) : null,   // 경기 중에 들어왔거나 관전이면 null
     bots: [],             // 방장일 때 내가 운전하는 봇들
     finishers: [], myTime: null, sendTick: 0, bestLap: null, prevBoost: 0,
     hitCooldown: new Map(), feed: [],
@@ -1077,6 +1149,7 @@ function draw(time) {
     c.id = id;
     c.color = p?.color ?? 0;
     c.type = p?.car ?? c.type ?? 0;
+    c.look = p?.car === CUSTOM_TYPE ? lookOf(p.custom) : null;   // 커스텀 차는 그 사람이 만든 생김새로
     c.teamColor = race.teams && p?.team >= 0 ? TEAM_COLORS[p.team] : null;
     cars.push(c);
   };

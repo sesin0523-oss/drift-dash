@@ -90,6 +90,36 @@
     </div>
   </section>
 
+  <!-- 차고: 커스텀 차 만들기 -->
+  <section id="garage" class="panel hidden">
+    <h2 id="gTitle">새 차 만들기</h2>
+    <canvas id="gPreview"></canvas>
+
+    <label class="row">이름 <input id="gName" maxlength="10" autocomplete="off"></label>
+
+    <div class="section-title">모양</div>
+    <div id="gShapes" class="shapes"></div>
+
+    <div class="row g-colors">
+      <label>차 색 <input type="color" id="gColor"></label>
+      <label>포인트 색 <input type="color" id="gAccent"></label>
+    </div>
+    <div class="row cfg">
+      <label>무늬 <select id="gPattern"></select></label>
+      <label>번호 <input id="gNumber" type="number" min="0" max="99" placeholder="없음"></label>
+    </div>
+
+    <div class="section-title">능력치 <span id="gPoints" class="points"></span></div>
+    <div id="gStats"></div>
+    <div class="hint">속도를 올리면 가속이 조금 느려지고, 무게를 올리면 덜 밀리고 스핀도 잘 안 당해요.</div>
+
+    <button id="gSave" class="primary" type="button">저장하고 이 차로 달리기</button>
+    <div class="row g-actions">
+      <button id="gCancel" class="ghost" type="button">취소</button>
+      <button id="gDelete" class="ghost hidden" type="button">이 차 지우기</button>
+    </div>
+  </section>
+
   <!-- 결과 -->
   <section id="results" class="panel hidden">
     <h2 id="resultTitle">레이스 결과</h2>

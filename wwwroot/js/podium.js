@@ -106,7 +106,7 @@ export class Podium {
       ctx.save();
       ctx.translate(xs[i], y);
       ctx.scale(2.3 * s, 2.3 * s);
-      R.drawCar({ x: 0, y: 0, a: -Math.PI / 2, type: p.type }, p.color);
+      R.drawCar({ x: 0, y: 0, a: -Math.PI / 2, type: p.type, look: p.look }, p.color);
       ctx.restore();
 
       if (k >= 1) {

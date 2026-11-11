@@ -3,7 +3,7 @@
 // 레이스 중에는 Enter 로 열고, 보내거나 Esc 를 누르면 닫혀서 바로 운전으로 돌아간다.
 // 메시지는 항상 textContent 로 넣는다 (다른 사람이 보낸 HTML 이 실행되지 않게).
 
-const FADE_MS = 8000;
+const FADE_MS = 12000;   // 레이스 중 메시지가 화면에 남는 시간
 
 export class Chat {
   constructor({ send, colorOf, onOpenChange, onIncoming }) {

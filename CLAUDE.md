@@ -19,7 +19,7 @@
 - 원격 차: 100ms 지연 보간 + 현재 시각까지 추측항법 (`net.js` RemoteCar). `st` 메시지 플래그: d(드리프트) b(부스트) sp(스핀) sh(보호막) gh(유령/투명) tw(견인) zp(감전).
 
 ## 주요 클라이언트 모듈
-- `track.js`: 12개 트랙(선셋 서킷, 협곡 헤어핀, 네온 시티, 도넛 링, 스노우 밸리, 해안 고속도로, 화산 분지, 숲속 와인딩, 공항 활주로, 사막 오아시스, 항구 부두, 절벽 고개). 트랙 추가 시 Room.cs `TrackCount`·`TrackNames`, Records.cs `TrackLength`(= buildTrack().length)도 갱신. Catmull-Rom 중심선 8px 샘플, `nearest()`, 체크포인트, 벽 = half+SHOULDER(70).
+- `track.js`: 13개 트랙(그랑프리 서킷=12번, 초대형 scale 3 · 선셋 서킷, 협곡 헤어핀, 네온 시티, 도넛 링, 스노우 밸리, 해안 고속도로, 화산 분지, 숲속 와인딩, 공항 활주로, 사막 오아시스, 항구 부두, 절벽 고개). 트랙 추가 시 Room.cs `TrackCount`·`TrackNames`, Records.cs `TrackLength`(= buildTrack().length)도 갱신. Catmull-Rom 중심선 8px 샘플, `nearest()`, 체크포인트, 벽 = half+SHOULDER(70).
   트랙 특색은 `FEATURES[이름]` → `t.features` (note, obstacles, patches, hazards, wind, zapWalls). buildTrack 결과에 obstacles/patches/hazards(Path2D)/hazardSide/wind/zapWalls. `windAt(track,i)`.
   - 사막: 모래 패치(sand)·모래 폭풍·오아시스 / 항구: 부두 바다·화물 상자(crate) / 절벽: 낭떠러지(cliff)·낙석
   - 협곡: 바위 / 네온: 감전 벽 / 도넛: 범퍼 / 스노우: 눈·빙판 패치 / 해안: 바다(빠지면 견인) / 화산: 용암 4구간(빠지면 견인 후 12포인트 뒤 도로 중앙에서 재시작, 잠시 유령) / 숲: 진흙·통나무 / 공항: 측풍.
@@ -27,6 +27,8 @@
 - `items.js`: banana, missile, shield, boost + 신규 oil, zap(전체 감전), ink(앞 차들 화면 먹물), magnet, cloak(3초 통과), boost3. hooks: send/hitMe/slideMe/fx/sfx/banner/sameTeam.
 - `main.js`: 전체 연결. `applyFx`(zap/ink 수신 → 내 차+내 봇만 판정), `slideCar`, `magnetPull`, `trackFx`(빠짐/감전 효과), `drawInk`, HUD(아이템 설명·boost3 남은 횟수), 로비 트랙 설명에 특징 표시.
 - `bot.js`(BOT_LEVELS, think, thinkItem — 신규 아이템 사용 규칙, 먹물 맞으면 흔들림 `inkT`), `render.js`, `audio.js`(sfx), `carart.js`/`garage.js`(커스텀 차), `podium.js`, `chat.js`, `net.js`.
+- 시리즈 `_seriesKind`: 0 단판, 1 3판 2선승, 2 그랑프리(4라운드 포인트제, `_gpTracks` = 고른 트랙 + 무작위 2 + 그랑프리 서킷). 클라이언트 `isGp`/`gpRunning`, `series` cfg 값은 숫자.
+- 섹터 기록: main.js `trackSectors`/`drawSectors` (체크포인트 3등분, 내 최고 구간과 비교).
 - 서버 `Room.cs`: 아이템전 `obj` kind 는 banana/missile/oil 만 허용, `fx` kind 는 zap/ink 만 중계.
 
 ## 테스트 패턴

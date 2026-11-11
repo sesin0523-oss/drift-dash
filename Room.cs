@@ -25,10 +25,10 @@ public sealed class Room
 {
     public const int MaxRacers = 6;            // 사람 + 봇
     public const int MaxConnections = 10;      // 관전자 포함
-    public const int TrackCount = 12;
+    public const int TrackCount = 13;
     private static readonly int[] PlacePoints = { 10, 8, 6, 5, 4, 3 };
     private static readonly string[] TrackNames =
-        { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로", "화산 분지", "숲속 와인딩", "공항 활주로", "사막 오아시스", "항구 부두", "절벽 고개" };
+        { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로", "화산 분지", "숲속 와인딩", "공항 활주로", "사막 오아시스", "항구 부두", "절벽 고개", "그랑프리 서킷" };
     private const int TeamGaugeMax = 100;
     private static readonly string[] BotNames = { "봇 번개", "봇 터보", "봇 회오리", "봇 질주", "봇 스키드", "봇 니트로" };
     private static readonly string[] LevelNames = { "쉬움", "보통", "어려움" };
@@ -49,7 +49,11 @@ public sealed class Room
 
     // 3판 2선승제
     private const int SeriesWinsNeeded = 2, SeriesMaxRaces = 3;
-    private bool _series;
+    private bool _series;                                       // 시리즈 진행 여부 (_seriesKind > 0)
+    private int _seriesKind;                                    // 0 단판, 1 3판 2선승, 2 그랑프리
+    private const int GpRounds = 4, GpCircuit = 12;             // 그랑프리: 4라운드, 마지막은 그랑프리 서킷
+    private readonly List<int> _gpTracks = new();
+    private bool IsGp => _seriesKind == 2;
     private int _seriesRaces;                                   // 끝난 판 수
     private readonly Dictionary<int, (string name, int wins, int points)> _seriesScore = new();
     private readonly int[] _seriesTeamWins = new int[2];
@@ -165,11 +169,14 @@ public sealed class Room
                     _laps = Math.Clamp((int?)m["laps"] ?? 3, 1, 9);
                     _mode = (string?)m["mode"] == "item" ? "item" : "speed";
                     bool teams = (bool?)m["teams"] ?? false;
-                    bool series = (bool?)m["series"] ?? false;
+                    int kind = Math.Clamp((int?)m["series"] ?? 0, 0, 2);
                     // 대결 방식이 바뀌면 진행 중이던 시리즈는 처음부터
-                    if (teams != _teams || series != _series) ResetSeriesLocked();
+                    if (teams != _teams || kind != _seriesKind) ResetSeriesLocked();
                     _teams = teams;
-                    _series = series;
+                    _seriesKind = kind;
+                    _series = kind > 0;
+                    // 그랑프리 도중에는 트랙이 정해진 순서대로 (방장이 못 바꿈)
+                    if (IsGp && _seriesRaces > 0 && !_seriesOver) _track = _gpTracks[_seriesRaces];
                     if (_teams) BalanceTeamsLocked();
                     BroadcastRosterLocked();
                     break;
@@ -235,6 +242,8 @@ public sealed class Room
                 case "start" when host && lobby:
                     if (RacerCount == 0) { c.Send(new { t = "error", msg = "레이서가 없어요. 관전을 끄거나 봇을 추가하세요." }); break; }
                     if (_seriesOver) ResetSeriesLocked();   // 끝난 시리즈 다음엔 새 시리즈
+                    if (IsGp && _seriesRaces == 0) PlanGpLocked();
+                    if (IsGp) _track = _gpTracks[_seriesRaces];
                     _phase = Phase.Race;
                     _raceId++;
                     _results.Clear();
@@ -455,6 +464,20 @@ public sealed class Room
         _seriesTeamWins[0] = _seriesTeamWins[1] = 0;
         _seriesTeamPoints[0] = _seriesTeamPoints[1] = 0;
         _seriesOver = false;
+        _gpTracks.Clear();
+    }
+
+    /// <summary>그랑프리 4라운드 트랙: 고른 트랙 → 다른 트랙 2개(무작위) → 마지막은 그랑프리 서킷</summary>
+    private void PlanGpLocked()
+    {
+        _gpTracks.Clear();
+        _gpTracks.Add(_track);
+        var others = Enumerable.Range(0, TrackCount).Where(i => i != _track && i != GpCircuit)
+                               .OrderBy(_ => Random.Shared.Next()).ToList();
+        int need = _track == GpCircuit ? GpRounds - 1 : GpRounds - 2;
+        _gpTracks.AddRange(others.Take(need));
+        if (_track != GpCircuit) _gpTracks.Add(GpCircuit);
+        SystemChatLocked("그랑프리 시작! " + string.Join(" → ", _gpTracks.Select(i => TrackNames[i])));
     }
 
     /// <summary>
@@ -472,6 +495,24 @@ public sealed class Room
             var (id, name, _) = _results[i];
             var s = _seriesScore[id];
             _seriesScore[id] = (name, s.wins + (i == 0 ? 1 : 0), s.points + PlacePoints[Math.Min(i, PlacePoints.Length - 1)]);
+        }
+
+        if (IsGp)
+        {
+            if (_teams) { _seriesTeamPoints[0] += teamScore[0]; _seriesTeamPoints[1] += teamScore[1]; }
+            _seriesOver = _seriesRaces >= GpRounds;
+            string head = $"그랑프리 {_seriesRaces}/{GpRounds}라운드 끝";
+            if (_teams)
+                SystemChatLocked($"{head}: 레드 {_seriesTeamPoints[0]}점 : {_seriesTeamPoints[1]}점 블루"
+                                 + (_seriesOver ? $" → {SeriesTeamChampionName()} 종합 우승!" : ""));
+            else
+            {
+                var lead = SeriesRanking().FirstOrDefault();
+                SystemChatLocked($"{head}: 선두 {lead.name} {lead.points}점"
+                                 + (_seriesOver && lead.name != null ? $" → {lead.name} 종합 우승!" : ""));
+            }
+            if (!_seriesOver) _track = _gpTracks[_seriesRaces];   // 다음 라운드 트랙
+            return;
         }
 
         if (_teams)
@@ -495,11 +536,12 @@ public sealed class Room
 
     private List<(int id, string name, int wins, int points)> SeriesRanking() =>
         _seriesScore.Select(kv => (kv.Key, kv.Value.name, kv.Value.wins, kv.Value.points))
-                    .OrderByDescending(s => s.wins).ThenByDescending(s => s.points).ToList();
+                    .OrderByDescending(s => IsGp ? s.points : s.wins).ThenByDescending(s => IsGp ? s.wins : s.points).ToList();
 
     private string SeriesTeamChampionName()
     {
         int w0 = _seriesTeamWins[0], w1 = _seriesTeamWins[1];
+        if (IsGp) w0 = w1 = 0;   // 그랑프리는 점수 합으로만
         if (w0 != w1) return w0 > w1 ? "레드 팀" : "블루 팀";
         int p0 = _seriesTeamPoints[0], p1 = _seriesTeamPoints[1];
         return p0 == p1 ? "무승부" : p0 > p1 ? "레드 팀" : "블루 팀";
@@ -508,9 +550,11 @@ public sealed class Room
     private object SeriesInfo() => new
     {
         on = _series,
+        kind = _seriesKind,
         races = _seriesRaces,
         need = SeriesWinsNeeded,
-        max = SeriesMaxRaces,
+        max = IsGp ? GpRounds : SeriesMaxRaces,
+        tracks = _gpTracks.ToArray(),
         over = _seriesOver,
         players = SeriesRanking().Select(s => new { s.id, s.name, s.wins, s.points }).ToArray(),
         teamWins = _seriesTeamWins,

@@ -448,7 +448,7 @@ TRACKS.forEach((t, i) => $('track').add(new Option(t.name, i)));
 for (let i = 1; i <= 5; i++) $('laps').add(new Option(`${i}바퀴`, i));
 const sendCfg = () => net.send({
   t: 'cfg', track: +$('track').value, laps: +$('laps').value, mode: $('mode').value,
-  teams: $('teams').value === '1', series: $('series').value === '1',
+  teams: $('teams').value === '1', series: +$('series').value,
 });
 for (const id of ['track', 'laps', 'mode', 'teams', 'series']) $(id).addEventListener('change', sendCfg);
 $('replayPodium').addEventListener('click', () => { if (lastResults) startPodium(lastResults); });
@@ -605,8 +605,9 @@ function renderLobby() {
   $('laps').value = roster.laps;
   $('mode').value = roster.mode ?? 'speed';
   $('teams').value = roster.teams ? '1' : '0';
-  $('series').value = roster.series?.on ? '1' : '0';
+  $('series').value = String(roster.series?.on ? roster.series.kind ?? 1 : 0);
   for (const id of ['track', 'laps', 'mode', 'teams', 'series']) $(id).disabled = !host;
+  if (gpRunning(roster.series)) $('track').disabled = true;   // 그랑프리 도중엔 트랙이 정해진 순서대로
   const sText = seriesText(roster.series, roster.teams);
   $('seriesStatus').classList.toggle('hidden', !sText);
   $('seriesStatus').textContent = sText;
@@ -633,9 +634,20 @@ function renderLobby() {
   $('waitLobby').textContent = host ? '' : `${hostName} 님이 로비로 돌아가기를 기다리는 중...`;
 }
 
-/** 로비에 보일 3판 2선승 진행 상황 한 줄 */
+const isGp = (S) => S?.on && S.kind === 2;
+const gpRunning = (S) => isGp(S) && S.races > 0 && !S.over;
+
+/** 로비에 보일 시리즈(3판 2선승 / 그랑프리) 진행 상황 한 줄 */
 function seriesText(S, teams) {
   if (!S?.on) return '';
+  if (isGp(S)) {
+    if (S.races === 0) return `그랑프리: ${S.max}라운드 포인트 합산 (1위 10, 2위 8, 3위 6…). 고른 트랙 → 무작위 2곳 → 마지막은 그랑프리 서킷`;
+    if (S.over) return '지난 그랑프리가 끝났어요. 시작하면 새 그랑프리가 시작돼요.';
+    const next = `${S.races + 1}/${S.max}라운드 ${TRACKS[S.tracks[S.races]]?.name ?? ''} 준비 중`;
+    if (teams) return `그랑프리 · ${next} · 레드 ${S.teamPoints[0]}점 : ${S.teamPoints[1]}점 블루`;
+    const top = S.players.slice(0, 3).map((p) => `${p.name} ${p.points}점`).join(', ');
+    return `그랑프리 · ${next} · ${top}`;
+  }
   if (S.races === 0) return '3판 2선승: 먼저 2판을 이기면 우승! (3판 뒤에도 2승이 없으면 누적 점수로)';
   if (S.over) return '지난 시리즈가 끝났어요. 시작하면 새 3판 2선승이 시작돼요.';
   const next = `${S.races + 1}판째 준비 중`;
@@ -658,13 +670,13 @@ function podiumData(m) {
 
   // 순위 목록: 시리즈 최종이면 (승수 → 점수), 단판이면 도착 순서
   const ranked = final
-    ? S.players.map((p) => ({ ...place(p.id, p.name, `${p.wins}승 · ${p.points}점`), team: look(p.id).team ?? -1 }))
+    ? S.players.map((p) => ({ ...place(p.id, p.name, isGp(S) ? `${p.points}점 · ${p.wins}승` : `${p.wins}승 · ${p.points}점`), team: look(p.id).team ?? -1 }))
     : m.list.map((r) => ({ ...place(r.id, r.name, fmtTime(r.time)), team: r.team ?? look(r.id).team ?? -1 }));
 
   if (!m.teams) {
     return {
       title: ranked[0] ? `${ranked[0].name} 우승!` : '완주한 사람이 없어요',
-      subtitle: final ? `3판 2선승 최종 결과 · ${S.races}판` : '레이스 결과',
+      subtitle: final ? (isGp(S) ? `그랑프리 종합 결과 · ${S.races}라운드` : `3판 2선승 최종 결과 · ${S.races}판`) : '레이스 결과',
       color: '#ffc531',
       places: ranked.slice(0, 3),
       others: ranked.slice(3).map((r, i) => `${i + 4}위 ${r.name}`).join('   '),
@@ -673,9 +685,9 @@ function podiumData(m) {
 
   let win, scoreLine;
   if (final) {
-    const [a, b] = S.teamWins, [pa, pb] = S.teamPoints;
+    const [a, b] = isGp(S) ? [0, 0] : S.teamWins, [pa, pb] = S.teamPoints;
     win = a !== b ? (a > b ? 0 : 1) : pa !== pb ? (pa > pb ? 0 : 1) : -1;
-    scoreLine = `3판 2선승 최종  레드 ${a}승 : ${b}승 블루`;
+    scoreLine = isGp(S) ? `그랑프리 종합  레드 ${pa}점 : ${pb}점 블루` : `3판 2선승 최종  레드 ${a}승 : ${b}승 블루`;
   } else {
     const [a, b] = m.teamScore;
     win = a === b ? -1 : a > b ? 0 : 1;
@@ -779,6 +791,7 @@ function startRace(m) {
     car: slot >= 0 ? new Car(track, slot, myP?.car ?? myCar, myP?.custom) : null,   // 경기 중에 들어왔거나 관전이면 null
     bots: [],             // 방장일 때 내가 운전하는 봇들
     finishers: [], myTime: null, sendTick: 0, bestLap: null, prevBoost: 0,
+    sec: { idx: 0, start: 0, cur: [], best: [null, null, null], pop: null },   // 섹터 기록
     hitCooldown: new Map(), feed: [],
     items: null,
     ghost: null, ghostRec: [],
@@ -1029,6 +1042,7 @@ function stepRace() {
       race.ghostRec.push(Math.round(car.x), Math.round(car.y), Math.round(car.a * 100) / 100);
   }
 
+  trackSectors(car, t);
   if (car.justLapped) {
     car.justLapped = false;
     const lt = car.lapTimes[car.lapTimes.length - 1];
@@ -1178,12 +1192,17 @@ function showResults(m) {
   const S = m.series?.on ? m.series : null;
   const box = $('seriesBox');
   box.classList.toggle('hidden', !S);
-  $('resultTitle').textContent = S ? (S.over ? '3판 2선승 최종 결과' : `${S.races}판 결과 (3판 2선승)`) : '레이스 결과';
+  const gp = isGp(S);
+  $('resultTitle').textContent = !S ? '레이스 결과' : gp
+    ? (S.over ? '그랑프리 종합 결과' : `그랑프리 ${S.races}/${S.max}라운드 결과`)
+    : (S.over ? '3판 2선승 최종 결과' : `${S.races}판 결과 (3판 2선승)`);
   if (S) {
     box.innerHTML = '';
     const head = document.createElement('div');
     head.className = 'head';
-    head.textContent = m.teams
+    head.textContent = gp
+      ? (m.teams ? `종합 포인트  레드 ${S.teamPoints[0]}점 : 블루 ${S.teamPoints[1]}점` : `종합 포인트 · ${S.races}/${S.max}라운드`)
+      : m.teams
       ? `시리즈 전적  레드 ${S.teamWins[0]}승 (${S.teamPoints[0]}점) : 블루 ${S.teamWins[1]}승 (${S.teamPoints[1]}점)`
       : `시리즈 전적 · ${S.races}판 진행`;
     const table = document.createElement('table');
@@ -1193,7 +1212,7 @@ function showResults(m) {
       const tm = playerOf(p.id)?.team;
       tr.children[0].textContent = p.name + (p.id === me ? ' (나)' : '');
       if (m.teams && tm >= 0) tr.children[0].style.color = TEAM_COLORS[tm];
-      tr.children[1].textContent = '★'.repeat(p.wins) + '☆'.repeat(Math.max(0, S.need - p.wins));
+      tr.children[1].textContent = gp ? (p.wins ? `🏆×${p.wins}` : '') : '★'.repeat(p.wins) + '☆'.repeat(Math.max(0, S.need - p.wins));
       tr.children[2].textContent = `${p.points}점`;
       table.append(tr);
     }
@@ -1201,11 +1220,13 @@ function showResults(m) {
     if (!S.over) {
       const next = document.createElement('div');
       next.className = 'next';
-      next.textContent = `다음은 ${S.races + 1}판째! 방장이 로비로 돌아가 트랙을 고르고 시작해요.`;
+      next.textContent = gp
+        ? `다음은 ${S.races + 1}라운드: ${TRACKS[S.tracks[S.races]]?.name ?? ''}! 방장이 로비로 돌아가 시작해요.`
+        : `다음은 ${S.races + 1}판째! 방장이 로비로 돌아가 트랙을 고르고 시작해요.`;
       box.append(next);
     }
   }
-  $('toLobby').textContent = S && !S.over ? `${S.races + 1}판째 준비하기` : '로비로 돌아가기';
+  $('toLobby').textContent = S && !S.over ? (gp ? `${S.races + 1}라운드 준비하기` : `${S.races + 1}판째 준비하기`) : '로비로 돌아가기';
   $('replayPodium').classList.toggle('hidden', !!(S && !S.over));
 
   renderLobby();
@@ -1324,6 +1345,55 @@ function drawGhost(ctx) {
   ctx.restore();
 }
 
+// ───────────────────────── 섹터 기록 ─────────────────────────
+// 한 바퀴를 체크포인트 기준으로 3등분해서 구간마다 시간을 재고, 내 최고 구간 기록과 비교한다.
+
+function trackSectors(car, t) {
+  const S = race.sec, C = race.track.cps.length;
+  if (car.finished || t < 0) return;
+  const bounds = [Math.round(C / 3), Math.round((2 * C) / 3)];
+  if (car.justLapped) {
+    const lt = car.lapTimes[car.lapTimes.length - 1];
+    if (S.cur[0] != null && S.cur[1] != null) finishSector(2, lt - S.cur[0] - S.cur[1]);
+    S.cur = []; S.idx = 0; S.start = car.lapStart;
+    return;
+  }
+  if (S.idx < 2 && car.nextCp > bounds[S.idx]) {
+    finishSector(S.idx, t - S.start);
+    S.start = t;
+    S.idx++;
+  }
+}
+
+function finishSector(i, v) {
+  const S = race.sec, best = S.best[i];
+  const pb = best == null || v < best;
+  S.cur[i] = v;
+  if (pb) S.best[i] = v;
+  S.pop = { i, v, delta: best == null ? null : v - best, pb, until: performance.now() + 2600 };
+}
+
+/** 화면 위쪽 가운데: S1 S2 S3 칸 (보라 = 내 최고 경신, 노랑 = 더 느림) + 방금 끝난 섹터 시간 */
+function drawSectors(R, s, car, rt, suffix = '') {
+  const S = race.sec, ctx = R.ctx;
+  const w = 74 * s, h = 22 * s, gap = 6, x0 = R.w / 2 - (w * 3 + gap * 2) / 2, y = (race.teams ? 96 : 10) * s;   // 팀전이면 팀 점수 아래
+  const now = performance.now();
+  for (let i = 0; i < 3; i++) {
+    const x = x0 + i * (w + gap), v = S.cur[i];
+    const done = v != null, isPb = done && S.best[i] === v;
+    ctx.fillStyle = !done ? (i === S.idx ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.4)') : isPb ? '#9b5cff' : '#c99a00';
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 6); ctx.fill();
+    R.text(done ? `S${i + 1} ${(v / 1000).toFixed(2)}` : `S${i + 1}`, x + w / 2, y + h * 0.74, 13 * s, '#ffffff', 'center', '800');
+  }
+  R.text(`이번 랩 ${fmtTime(Math.max(0, rt - car.lapStart))}${suffix ? ' · ' + suffix : ''}`, R.w / 2, y + h + 20 * s, 15 * s, '#ffffff', 'center', '700');
+  const p = S.pop;
+  if (p && now < p.until) {
+    const d = p.delta == null ? '' : ` (${p.delta <= 0 ? '−' : '+'}${Math.abs(p.delta / 1000).toFixed(2)})`;
+    R.text(`섹터 ${p.i + 1}  ${(p.v / 1000).toFixed(2)}${d}${p.pb && p.delta != null ? '  최고 기록!' : ''}`,
+      R.w / 2, y + h + 44 * s, 18 * s, p.pb ? '#c9a2ff' : '#ffe14d', 'center', '900');
+  }
+}
+
 function drawHud(st, cars) {
   const R = renderer;
   R.beginScreen();
@@ -1339,9 +1409,17 @@ function drawHud(st, cars) {
     R.text(`${place}위`, 20, 84 * s, 30 * s, '#ffc531');
     R.text(`/ ${st.length}`, 20 + (place >= 10 ? 62 : 46) * s, 84 * s, 18 * s, '#dddddd');
     R.text(fmtTime(car.finished ? race.myTime : Math.max(0, rt)), 20, 114 * s, 20 * s);
-    if (race.bestLap != null) R.text(`최고 랩 ${fmtTime(race.bestLap)}`, 20, 138 * s, 15 * s, '#cfd3da', 'left', '600');
-    if (race.series?.on)
-      R.text(`3판 2선승 · ${race.series.races + 1}판째`, 150 * s, 44 * s, 15 * s, '#ffe08a', 'left', '800');
+    if (race.bestLap != null) {
+      const last = car.lapTimes[car.lapTimes.length - 1];
+      R.text(`최고 랩 ${fmtTime(race.bestLap)} · 직전 ${fmtTime(last)}`, 20, 138 * s, 15 * s, '#cfd3da', 'left', '600');
+    }
+    const seriesLabel = !race.series?.on ? ''
+      : isGp(race.series) ? `그랑프리 ${race.series.races + 1}/${race.series.max}R` : `3판 2선승 ${race.series.races + 1}판째`;
+    const showSectors = !car.finished && rt >= 0;
+    // 좁은 화면에서는 섹터 칸과 겹치지 않게 시리즈 표시를 "이번 랩" 줄에 붙인다
+    if (seriesLabel && !(showSectors && R.w < 900))
+      R.text(seriesLabel, 150 * s, 44 * s, 15 * s, '#ffe08a', 'left', '800');
+    if (showSectors) drawSectors(R, s, car, rt, R.w < 900 ? seriesLabel : '');
     if (race.ghost && !race.items)
       R.text(`트랙 기록 ${fmtTime(race.ghost.time)} · ${race.ghost.name}${ghostOn ? '' : ' (G: 고스트 켜기)'}`,
         20, (race.bestLap != null ? 158 : 138) * s, 14 * s, '#ffe08a', 'left', '600');
@@ -1389,6 +1467,7 @@ function drawHud(st, cars) {
     drawTeammateArrows(R, cars, s);
     feedY = 84;
   }
+  if (car && !car.finished && rt >= 0) feedY += 84 * s;   // 섹터 칸 아래로
 
   if (rt < 0) {
     const n = Math.ceil(-rt / 1000);

@@ -1,0 +1,8 @@
+# Render.com 배포 설정 (Blueprint). 저장소를 연결하면 Dockerfile 로 자동 빌드·배포됩니다.
+services:
+  - type: web
+    name: drift-dash
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/info
+    autoDeploy: true

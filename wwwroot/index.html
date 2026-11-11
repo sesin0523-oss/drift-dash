@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Drift Dash</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- 로비 -->
+  <section id="lobby" class="panel">
+    <h1>DRIFT DASH</h1>
+    <p class="sub">탑뷰 레이싱 · 링크로 친구와 함께</p>
+
+    <label class="row">닉네임
+      <input id="name" maxlength="12" autocomplete="off">
+    </label>
+
+    <div class="share">
+      <div class="share-title">친구 초대 링크 <span id="roomCode"></span></div>
+      <div class="row">
+        <input id="link" readonly>
+        <button id="copy" class="ghost">복사</button>
+      </div>
+      <div id="linkHint" class="hint"></div>
+    </div>
+
+    <ul id="players"></ul>
+
+    <div class="row cfg">
+      <label>모드
+        <select id="mode">
+          <option value="speed">스피드전</option>
+          <option value="item">아이템전</option>
+        </select>
+      </label>
+    </div>
+    <div class="row cfg">
+      <label>트랙 <select id="track"></select></label>
+      <label>바퀴 <select id="laps"></select></label>
+    </div>
+    <div id="trackDesc" class="hint"></div>
+
+    <button id="start" class="primary">레이스 시작</button>
+    <div id="waitHost" class="hint center"></div>
+
+    <div class="keys">
+      <b>↑ / W</b> 가속 · <b>↓ / S</b> 브레이크·후진 · <b>← → / A D</b> 조향<br>
+      <b>Space</b> 드리프트 (길게 하다 놓으면 미니 터보) · <b>M</b> 소리<br>
+      <b>Shift / E</b> 아이템 사용 (아이템전) · 상대 뒤 모서리를 박으면 스핀<br>
+      레이스 중 <b>Enter</b> 채팅 열기 · <b>Esc</b> 닫기
+    </div>
+  </section>
+
+  <!-- 결과 -->
+  <section id="results" class="panel hidden">
+    <h2>레이스 결과</h2>
+    <ol id="resultList"></ol>
+    <button id="toLobby" class="primary">로비로 돌아가기</button>
+    <div id="waitLobby" class="hint center"></div>
+  </section>
+
+  <!-- 연결 끊김 -->
+  <section id="disconnected" class="panel hidden">
+    <h2>서버와 연결이 끊어졌어요</h2>
+    <p class="hint">서버가 꺼졌거나 인터넷이 끊겼을 수 있어요.</p>
+    <button class="primary" onclick="location.reload()">다시 연결</button>
+  </section>
+
+  <!-- 채팅 (로비/결과에선 패널 안으로, 레이스 중엔 왼쪽 아래로 옮겨짐) -->
+  <div id="chat" class="embedded">
+    <div id="chatLog" aria-live="polite"></div>
+    <form id="chatForm" autocomplete="off">
+      <input id="chatInput" maxlength="120" placeholder="메시지 입력 후 Enter">
+      <button type="submit" class="ghost">보내기</button>
+    </form>
+    <button id="chatToggle" type="button" class="ghost">채팅</button>
+  </div>
+
+  <!-- 휴대폰용 터치 버튼 -->
+  <div id="touch" class="hidden">
+    <div class="tleft">
+      <button data-k="left">◀</button>
+      <button data-k="right">▶</button>
+    </div>
+    <div class="tright">
+      <button data-k="item">아이템</button>
+      <button data-k="brake">브레이크</button>
+      <button data-k="drift">드리프트</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -45,6 +45,15 @@ public sealed class Room
     private int _laps = 3;
     private string _mode = "speed";   // speed: 스피드전, item: 아이템전
     private bool _teams;              // 팀전 (레드 vs 블루)
+
+    // 3판 2선승제
+    private const int SeriesWinsNeeded = 2, SeriesMaxRaces = 3;
+    private bool _series;
+    private int _seriesRaces;                                   // 끝난 판 수
+    private readonly Dictionary<int, (string name, int wins, int points)> _seriesScore = new();
+    private readonly int[] _seriesTeamWins = new int[2];
+    private readonly int[] _seriesTeamPoints = new int[2];
+    private bool _seriesOver;
     private readonly int[] _teamGauge = new int[2];   // 팀 부스터 게이지 (0~100)
     private long _startAt;
     private int _raceId;
@@ -150,13 +159,20 @@ public sealed class Room
             {
                 // ── 로비 설정 ──
                 case "cfg" when host && lobby:
+                {
                     _track = Math.Clamp((int?)m["track"] ?? 0, 0, TrackCount - 1);
                     _laps = Math.Clamp((int?)m["laps"] ?? 3, 1, 9);
                     _mode = (string?)m["mode"] == "item" ? "item" : "speed";
-                    _teams = (bool?)m["teams"] ?? false;
+                    bool teams = (bool?)m["teams"] ?? false;
+                    bool series = (bool?)m["series"] ?? false;
+                    // 대결 방식이 바뀌면 진행 중이던 시리즈는 처음부터
+                    if (teams != _teams || series != _series) ResetSeriesLocked();
+                    _teams = teams;
+                    _series = series;
                     if (_teams) BalanceTeamsLocked();
                     BroadcastRosterLocked();
                     break;
+                }
 
                 case "car" when lobby:
                     c.Car = Math.Clamp((int?)m["car"] ?? 0, 0, 3);
@@ -209,6 +225,7 @@ public sealed class Room
 
                 case "start" when host && lobby:
                     if (RacerCount == 0) { c.Send(new { t = "error", msg = "레이서가 없어요. 관전을 끄거나 봇을 추가하세요." }); break; }
+                    if (_seriesOver) ResetSeriesLocked();   // 끝난 시리즈 다음엔 새 시리즈
                     _phase = Phase.Race;
                     _raceId++;
                     _results.Clear();
@@ -365,6 +382,7 @@ public sealed class Room
         laps = _laps,
         mode = _mode,
         teams = _teams,
+        series = SeriesInfo(),
         startAt = _startAt,
         grid = RacersInRace.Select(r => r.id).ToArray(),
     };
@@ -383,28 +401,103 @@ public sealed class Room
 
         // 팀전: 순위 점수 합 (1위 10, 2위 8, 3위 6, 4위 5, 5위 4, 6위 3, 완주 못함 0)
         int[] teamScore = new int[2];
+        var teamOfRacer = racers.ToDictionary(r => r.id, r => r.team);
         if (_teams)
         {
             for (int i = 0; i < _results.Count; i++)
             {
-                int team = racers.FirstOrDefault(r => r.id == _results[i].id).team;
+                int team = teamOfRacer.GetValueOrDefault(_results[i].id, -1);
                 if (team is 0 or 1) teamScore[team] += PlacePoints[Math.Min(i, PlacePoints.Length - 1)];
             }
             string winner = teamScore[0] == teamScore[1] ? "무승부!" : teamScore[0] > teamScore[1] ? "레드 팀 승리!" : "블루 팀 승리!";
             SystemChatLocked($"팀전 결과 {teamScore[0]} : {teamScore[1]} {winner}");
         }
 
+        if (_series) UpdateSeriesLocked(racers.Select(r => (r.id, r.name)).ToList(), teamScore);
+
         Broadcast(new
         {
             t = "results",
-            list = _results.Select(r => new { r.id, r.name, r.time }).ToArray(),
+            list = _results.Select(r => new { r.id, r.name, r.time, team = teamOfRacer.GetValueOrDefault(r.id, -1) }).ToArray(),
             dnf,
             teams = _teams,
             teamScore,
             points = PlacePoints,
+            series = SeriesInfo(),
         });
         BroadcastRosterLocked();
     }
+
+    // ───────────────────────── 3판 2선승제 ─────────────────────────
+
+    private void ResetSeriesLocked()
+    {
+        _seriesRaces = 0;
+        _seriesScore.Clear();
+        _seriesTeamWins[0] = _seriesTeamWins[1] = 0;
+        _seriesTeamPoints[0] = _seriesTeamPoints[1] = 0;
+        _seriesOver = false;
+    }
+
+    /// <summary>
+    /// 한 판이 끝날 때마다: 순위 점수 누적, 1등(개인) 또는 점수가 높은 팀이 1승.
+    /// 누군가 2승하거나 3판을 다 하면 시리즈 끝 (승수 → 누적 점수 순으로 우승 결정).
+    /// </summary>
+    private void UpdateSeriesLocked(List<(int id, string name)> racers, int[] teamScore)
+    {
+        _seriesRaces++;
+        foreach (var (id, name) in racers)
+            if (!_seriesScore.ContainsKey(id)) _seriesScore[id] = (name, 0, 0);
+
+        for (int i = 0; i < _results.Count; i++)
+        {
+            var (id, name, _) = _results[i];
+            var s = _seriesScore[id];
+            _seriesScore[id] = (name, s.wins + (i == 0 ? 1 : 0), s.points + PlacePoints[Math.Min(i, PlacePoints.Length - 1)]);
+        }
+
+        if (_teams)
+        {
+            _seriesTeamPoints[0] += teamScore[0];
+            _seriesTeamPoints[1] += teamScore[1];
+            if (teamScore[0] != teamScore[1]) _seriesTeamWins[teamScore[0] > teamScore[1] ? 0 : 1]++;
+            _seriesOver = _seriesTeamWins.Max() >= SeriesWinsNeeded || _seriesRaces >= SeriesMaxRaces;
+            SystemChatLocked($"3판 2선승 {_seriesRaces}판 끝: 레드 {_seriesTeamWins[0]}승 : {_seriesTeamWins[1]}승 블루"
+                             + (_seriesOver ? $" → {SeriesTeamChampionName()} 최종 우승!" : ""));
+        }
+        else
+        {
+            _seriesOver = _seriesScore.Values.Any(s => s.wins >= SeriesWinsNeeded) || _seriesRaces >= SeriesMaxRaces;
+            var lead = SeriesRanking().FirstOrDefault();
+            string winnerName = _results.Count > 0 ? _results[0].name : "없음";
+            SystemChatLocked($"3판 2선승 {_seriesRaces}판 끝: 이번 판 1등 {winnerName}"
+                             + (_seriesOver && lead.name != null ? $" → {lead.name} 최종 우승! ({lead.wins}승 {lead.points}점)" : ""));
+        }
+    }
+
+    private List<(int id, string name, int wins, int points)> SeriesRanking() =>
+        _seriesScore.Select(kv => (kv.Key, kv.Value.name, kv.Value.wins, kv.Value.points))
+                    .OrderByDescending(s => s.wins).ThenByDescending(s => s.points).ToList();
+
+    private string SeriesTeamChampionName()
+    {
+        int w0 = _seriesTeamWins[0], w1 = _seriesTeamWins[1];
+        if (w0 != w1) return w0 > w1 ? "레드 팀" : "블루 팀";
+        int p0 = _seriesTeamPoints[0], p1 = _seriesTeamPoints[1];
+        return p0 == p1 ? "무승부" : p0 > p1 ? "레드 팀" : "블루 팀";
+    }
+
+    private object SeriesInfo() => new
+    {
+        on = _series,
+        races = _seriesRaces,
+        need = SeriesWinsNeeded,
+        max = SeriesMaxRaces,
+        over = _seriesOver,
+        players = SeriesRanking().Select(s => new { s.id, s.name, s.wins, s.points }).ToArray(),
+        teamWins = _seriesTeamWins,
+        teamPoints = _seriesTeamPoints,
+    };
 
     private void StartTimeout(int raceId, TimeSpan after)
     {
@@ -446,6 +539,7 @@ public sealed class Room
             laps = _laps,
             mode = _mode,
             teams = _teams,
+            series = SeriesInfo(),
             players = people.Concat(bots).ToArray(),
         });
     }

@@ -61,6 +61,15 @@
       <label>트랙 <select id="track"></select></label>
       <label>바퀴 <select id="laps"></select></label>
     </div>
+    <div class="row cfg">
+      <label>경기 방식
+        <select id="series">
+          <option value="0">단판</option>
+          <option value="1">3판 2선승</option>
+        </select>
+      </label>
+    </div>
+    <div id="seriesStatus" class="series-status hidden"></div>
     <div id="trackDesc" class="hint"></div>
 
     <div class="records">
@@ -83,9 +92,11 @@
 
   <!-- 결과 -->
   <section id="results" class="panel hidden">
-    <h2>레이스 결과</h2>
+    <h2 id="resultTitle">레이스 결과</h2>
     <div id="teamScore" class="team-score hidden"></div>
     <ol id="resultList"></ol>
+    <div id="seriesBox" class="series-box hidden"></div>
+    <button id="replayPodium" class="ghost hidden" type="button">시상식 다시 보기</button>
     <button id="toLobby" class="primary">로비로 돌아가기</button>
     <div id="waitLobby" class="hint center"></div>
   </section>

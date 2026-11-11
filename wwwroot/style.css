@@ -281,6 +281,31 @@ label.check input { width: 18px; height: 18px; }
 .team-score .vs { margin: 0 10px; }
 .team-score .who { font-size: 16px; color: var(--accent2); margin-top: 2px; }
 
+/* 3판 2선승 */
+.series-status {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 197, 49, 0.1);
+  border: 1px solid rgba(255, 197, 49, 0.3);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.series-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+}
+.series-box .head { font-weight: 800; margin-bottom: 6px; }
+.series-box table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.series-box td { padding: 3px 4px; }
+.series-box td.num { text-align: right; color: var(--muted); }
+.series-box .stars { color: var(--accent2); letter-spacing: 2px; }
+.series-box .next { margin-top: 8px; color: var(--accent2); font-weight: 700; font-size: 14px; }
+#replayPodium { width: 100%; margin-top: 10px; }
+
 /* 관전 바 */
 #specBar {
   position: fixed;

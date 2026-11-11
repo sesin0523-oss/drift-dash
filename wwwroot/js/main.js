@@ -10,6 +10,7 @@ import { Sound } from './audio.js';
 import { Chat } from './chat.js';
 import { Items, drawIcon, ITEM_NAMES } from './items.js';
 import { Bot, BOT_LEVELS } from './bot.js';
+import { Podium } from './podium.js';
 
 const DT = 1 / 60;
 const PLACE_POINTS = [10, 8, 6, 5, 4, 3];   // 팀전 순위 점수
@@ -47,6 +48,8 @@ let banner = null;
 let lastCount = null;
 let records = [];
 let ghostOn = store.get('dd-ghost') !== '0';
+let podium = null;             // 시상식 장면 (mode === 'podium' 일 때)
+let lastResults = null;        // 마지막 결과 (시상식 다시 보기용)
 
 const getTrack = (i) => {
   if (!trackCache.has(i)) trackCache.set(i, buildTrack(i));
@@ -88,6 +91,11 @@ const ITEM_KEYS = ['ShiftLeft', 'ShiftRight', 'KeyE'];   // Ctrl 은 W 와 같�
 addEventListener('keydown', (e) => {
   sound.unlock();
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (mode === 'podium' && ['Enter', 'Space', 'Escape'].includes(e.code) && podium?.elapsed > 1) {
+    e.preventDefault();
+    endPodium();
+    return;
+  }
   if (e.code === 'Enter' && chat.floating && !chat.isOpen) {
     e.preventDefault();
     chat.open();
@@ -111,6 +119,8 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 addEventListener('pointerdown', () => sound.unlock());
+// 시상식 중 화면을 누르면 결과 화면으로
+$('game').addEventListener('pointerdown', () => { if (mode === 'podium' && podium?.elapsed > 1) endPodium(); });
 
 // 휴대폰: 화면을 처음 만지면 터치 조작으로 전환
 addEventListener('touchstart', () => {
@@ -316,7 +326,12 @@ net.on('lapres', (m) => {
   fetchRecords();
 });
 
-net.on('results', (m) => showResults(m));
+// 결과: 단판이거나 3판 2선승이 끝났으면 시상식부터, 시리즈 도중이면 중간 결과만
+net.on('results', (m) => {
+  lastResults = m;
+  if (m.series?.on && !m.series.over) showResults(m);
+  else startPodium(m);
+});
 net.on('chat', (m) => chat.add(m));
 net.on('left', (m) => {
   remotes.delete(m.id);
@@ -342,9 +357,11 @@ $('name').addEventListener('change', () => {
 TRACKS.forEach((t, i) => $('track').add(new Option(t.name, i)));
 for (let i = 1; i <= 5; i++) $('laps').add(new Option(`${i}바퀴`, i));
 const sendCfg = () => net.send({
-  t: 'cfg', track: +$('track').value, laps: +$('laps').value, mode: $('mode').value, teams: $('teams').value === '1',
+  t: 'cfg', track: +$('track').value, laps: +$('laps').value, mode: $('mode').value,
+  teams: $('teams').value === '1', series: $('series').value === '1',
 });
-for (const id of ['track', 'laps', 'mode', 'teams']) $(id).addEventListener('change', sendCfg);
+for (const id of ['track', 'laps', 'mode', 'teams', 'series']) $(id).addEventListener('change', sendCfg);
+$('replayPodium').addEventListener('click', () => { if (lastResults) startPodium(lastResults); });
 
 $('spec').addEventListener('change', () => net.send({ t: 'spec', on: $('spec').checked }));
 for (const btn of document.querySelectorAll('[data-bot]'))
@@ -473,7 +490,11 @@ function renderLobby() {
   $('laps').value = roster.laps;
   $('mode').value = roster.mode ?? 'speed';
   $('teams').value = roster.teams ? '1' : '0';
-  for (const id of ['track', 'laps', 'mode', 'teams']) $(id).disabled = !host;
+  $('series').value = roster.series?.on ? '1' : '0';
+  for (const id of ['track', 'laps', 'mode', 'teams', 'series']) $(id).disabled = !host;
+  const sText = seriesText(roster.series, roster.teams);
+  $('seriesStatus').classList.toggle('hidden', !sText);
+  $('seriesStatus').textContent = sText;
   $('trackDesc').textContent = TRACKS[roster.track].desc + (roster.mode === 'item'
     ? ' · 아이템전: ? 상자를 먹고 Shift/E 로 사용'
     : '') + (roster.teams ? ' · 팀전: 순위 점수(1위 10, 2위 8, 3위 6…)의 합으로 승부' : '');
@@ -494,6 +515,84 @@ function renderLobby() {
 
   $('toLobby').classList.toggle('hidden', !host);
   $('waitLobby').textContent = host ? '' : `${hostName} 님이 로비로 돌아가기를 기다리는 중...`;
+}
+
+/** 로비에 보일 3판 2선승 진행 상황 한 줄 */
+function seriesText(S, teams) {
+  if (!S?.on) return '';
+  if (S.races === 0) return '3판 2선승: 먼저 2판을 이기면 우승! (3판 뒤에도 2승이 없으면 누적 점수로)';
+  if (S.over) return '지난 시리즈가 끝났어요. 시작하면 새 3판 2선승이 시작돼요.';
+  const next = `${S.races + 1}판째 준비 중`;
+  if (teams) return `3판 2선승 · ${next} · 레드 ${S.teamWins[0]}승 : ${S.teamWins[1]}승 블루`;
+  const lead = S.players.filter((p) => p.wins > 0).map((p) => `${p.name} ${p.wins}승`).join(', ') || '아직 승자 없음';
+  return `3판 2선승 · ${next} · ${lead}`;
+}
+
+// ───────────────────────── 시상식 ─────────────────────────
+
+/** 결과 → 시상대 데이터 (개인전: 1·2·3등 / 팀전: 이긴 팀 선수들) */
+function podiumData(m) {
+  const S = m.series?.on ? m.series : null;
+  const final = !!S?.over;
+  const look = (id) => playerOf(id) ?? {};
+  const place = (id, name, sub) => ({ id, name, sub, color: COLORS[(look(id).color ?? 0) % COLORS.length], type: look(id).car ?? 0 });
+
+  // 순위 목록: 시리즈 최종이면 (승수 → 점수), 단판이면 도착 순서
+  const ranked = final
+    ? S.players.map((p) => ({ ...place(p.id, p.name, `${p.wins}승 · ${p.points}점`), team: look(p.id).team ?? -1 }))
+    : m.list.map((r) => ({ ...place(r.id, r.name, fmtTime(r.time)), team: r.team ?? look(r.id).team ?? -1 }));
+
+  if (!m.teams) {
+    return {
+      title: ranked[0] ? `${ranked[0].name} 우승!` : '완주한 사람이 없어요',
+      subtitle: final ? `3판 2선승 최종 결과 · ${S.races}판` : '레이스 결과',
+      color: '#ffc531',
+      places: ranked.slice(0, 3),
+      others: ranked.slice(3).map((r, i) => `${i + 4}위 ${r.name}`).join('   '),
+    };
+  }
+
+  let win, scoreLine;
+  if (final) {
+    const [a, b] = S.teamWins, [pa, pb] = S.teamPoints;
+    win = a !== b ? (a > b ? 0 : 1) : pa !== pb ? (pa > pb ? 0 : 1) : -1;
+    scoreLine = `3판 2선승 최종  레드 ${a}승 : ${b}승 블루`;
+  } else {
+    const [a, b] = m.teamScore;
+    win = a === b ? -1 : a > b ? 0 : 1;
+    scoreLine = `팀 점수  레드 ${a} : ${b} 블루`;
+  }
+  if (win < 0) {
+    return { title: '무승부!', subtitle: scoreLine, color: '#ffffff', places: ranked.slice(0, 3), others: '' };
+  }
+  const winners = ranked.filter((r) => r.team === win);
+  const losers = ranked.filter((r) => r.team !== win).map((r) => r.name);
+  return {
+    title: `${TEAM_NAMES[win]} 팀 승리!`,
+    subtitle: scoreLine,
+    color: TEAM_COLORS[win],
+    places: winners.slice(0, 3),
+    others: losers.length ? `${TEAM_NAMES[1 - win]} 팀: ${losers.join(', ')}` : '',
+  };
+}
+
+function startPodium(m) {
+  podium = new Podium(podiumData(m), {
+    land: (i) => (i === 0 ? sound.fanfare() : sound.beep(i === 1 ? 784 : 659, 0.18, 'square', 0.2)),
+  });
+  mode = 'podium';
+  sound.silenceEngine();
+  $('lobby').classList.add('hidden');
+  $('results').classList.add('hidden');
+  chat.placeIn(null);   // 시상식 중엔 채팅이 화면 위에 떠 있음
+  updateTouchVisibility();
+  clearTimeout(startPodium.timer);
+  startPodium.timer = setTimeout(() => { if (mode === 'podium') endPodium(); }, 7500);
+}
+
+function endPodium() {
+  podium = null;
+  if (lastResults) showResults(lastResults);
 }
 
 // ───────────────────────── 랭킹 ─────────────────────────
@@ -557,6 +656,7 @@ function startRace(m) {
   const myP = playerOf(me);
   race = {
     id: m.raceId, track, laps: m.laps, startAt: m.startAt, grid: m.grid, mode: m.mode, teams: !!m.teams,
+    series: m.series,
     car: slot >= 0 ? new Car(track, slot, myP?.car ?? myCar) : null,   // 경기 중에 들어왔거나 관전이면 null
     bots: [],             // 방장일 때 내가 운전하는 봇들
     finishers: [], myTime: null, sendTick: 0, bestLap: null, prevBoost: 0,
@@ -912,6 +1012,41 @@ function showResults(m) {
     ts.querySelector('.blue').textContent = `${b} 블루`;
     ts.querySelector('.who').textContent = r === b ? '무승부!' : r > b ? '레드 팀 승리!' : '블루 팀 승리!';
   }
+
+  // 3판 2선승 전적표
+  const S = m.series?.on ? m.series : null;
+  const box = $('seriesBox');
+  box.classList.toggle('hidden', !S);
+  $('resultTitle').textContent = S ? (S.over ? '3판 2선승 최종 결과' : `${S.races}판 결과 (3판 2선승)`) : '레이스 결과';
+  if (S) {
+    box.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.textContent = m.teams
+      ? `시리즈 전적  레드 ${S.teamWins[0]}승 (${S.teamPoints[0]}점) : 블루 ${S.teamWins[1]}승 (${S.teamPoints[1]}점)`
+      : `시리즈 전적 · ${S.races}판 진행`;
+    const table = document.createElement('table');
+    for (const p of S.players) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td></td><td class="stars"></td><td class="num"></td>';
+      const tm = playerOf(p.id)?.team;
+      tr.children[0].textContent = p.name + (p.id === me ? ' (나)' : '');
+      if (m.teams && tm >= 0) tr.children[0].style.color = TEAM_COLORS[tm];
+      tr.children[1].textContent = '★'.repeat(p.wins) + '☆'.repeat(Math.max(0, S.need - p.wins));
+      tr.children[2].textContent = `${p.points}점`;
+      table.append(tr);
+    }
+    box.append(head, table);
+    if (!S.over) {
+      const next = document.createElement('div');
+      next.className = 'next';
+      next.textContent = `다음은 ${S.races + 1}판째! 방장이 로비로 돌아가 트랙을 고르고 시작해요.`;
+      box.append(next);
+    }
+  }
+  $('toLobby').textContent = S && !S.over ? `${S.races + 1}판째 준비하기` : '로비로 돌아가기';
+  $('replayPodium').classList.toggle('hidden', !!(S && !S.over));
+
   renderLobby();
   $('results').classList.remove('hidden');
   placeChat();
@@ -1018,6 +1153,8 @@ function drawHud(st, cars) {
     R.text(`/ ${st.length}`, 20 + (place >= 10 ? 62 : 46) * s, 84 * s, 18 * s, '#dddddd');
     R.text(fmtTime(car.finished ? race.myTime : Math.max(0, rt)), 20, 114 * s, 20 * s);
     if (race.bestLap != null) R.text(`최고 랩 ${fmtTime(race.bestLap)}`, 20, 138 * s, 15 * s, '#cfd3da', 'left', '600');
+    if (race.series?.on)
+      R.text(`3판 2선승 · ${race.series.races + 1}판째`, 150 * s, 44 * s, 15 * s, '#ffe08a', 'left', '800');
     if (race.ghost && !race.items)
       R.text(`트랙 기록 ${fmtTime(race.ghost.time)} · ${race.ghost.name}${ghostOn ? '' : ' (G: 고스트 켜기)'}`,
         20, (race.bestLap != null ? 158 : 138) * s, 14 * s, '#ffe08a', 'left', '600');
@@ -1174,11 +1311,12 @@ function frame(time) {
   last = time;
   while (acc >= DT) {
     acc -= DT;
-    if (mode !== 'lobby' && race) stepRace();
+    if ((mode === 'race' || mode === 'results') && race) stepRace();
     renderer.updateParticles(DT);
   }
-  if (mode === 'lobby') sound.silenceEngine();
-  draw(time);
+  if (mode === 'lobby' || mode === 'podium') sound.silenceEngine();
+  if (mode === 'podium' && podium) podium.draw(renderer);
+  else draw(time);
   requestAnimationFrame(frame);
 }
 

@@ -25,10 +25,10 @@ public sealed class Room
 {
     public const int MaxRacers = 6;            // 사람 + 봇
     public const int MaxConnections = 10;      // 관전자 포함
-    public const int TrackCount = 13;
+    public const int TrackCount = 16;
     private static readonly int[] PlacePoints = { 10, 8, 6, 5, 4, 3 };
     private static readonly string[] TrackNames =
-        { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로", "화산 분지", "숲속 와인딩", "공항 활주로", "사막 오아시스", "항구 부두", "절벽 고개", "그랑프리 서킷" };
+        { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로", "화산 분지", "숲속 와인딩", "공항 활주로", "사막 오아시스", "항구 부두", "절벽 고개", "호수 순환로", "대평원 하이웨이", "알파인 고개", "야간 도심 순환" };
     private const int TeamGaugeMax = 100;
     private static readonly string[] BotNames = { "봇 번개", "봇 터보", "봇 회오리", "봇 질주", "봇 스키드", "봇 니트로" };
     private static readonly string[] LevelNames = { "쉬움", "보통", "어려움" };
@@ -51,7 +51,9 @@ public sealed class Room
     private const int SeriesWinsNeeded = 2, SeriesMaxRaces = 3;
     private bool _series;                                       // 시리즈 진행 여부 (_seriesKind > 0)
     private int _seriesKind;                                    // 0 단판, 1 3판 2선승, 2 그랑프리
-    private const int GpRounds = 4, GpCircuit = 12;             // 그랑프리: 4라운드, 마지막은 그랑프리 서킷
+    // 그랑프리 모드: 그랑프리 전용 긴 코스 4개를 차례로 달려 포인트 합산
+    private static readonly int[] GpTrackIds = { 12, 13, 14, 15 };
+    private const int GpRounds = 4;
     private readonly List<int> _gpTracks = new();
     private bool IsGp => _seriesKind == 2;
     private int _seriesRaces;                                   // 끝난 판 수
@@ -167,16 +169,18 @@ public sealed class Room
                 {
                     _track = Math.Clamp((int?)m["track"] ?? 0, 0, TrackCount - 1);
                     _laps = Math.Clamp((int?)m["laps"] ?? 3, 1, 9);
-                    _mode = (string?)m["mode"] == "item" ? "item" : "speed";
+                    _mode = (string?)m["mode"] switch { "item" => "item", "gp" => "gp", _ => "speed" };
                     bool teams = (bool?)m["teams"] ?? false;
-                    int kind = Math.Clamp((int?)m["series"] ?? 0, 0, 2);
+                    // 그랑프리 모드는 항상 4라운드 포인트제, 그 밖에는 단판 / 3판 2선승
+                    int kind = _mode == "gp" ? 2 : Math.Clamp((int?)m["series"] ?? 0, 0, 1);
                     // 대결 방식이 바뀌면 진행 중이던 시리즈는 처음부터
                     if (teams != _teams || kind != _seriesKind) ResetSeriesLocked();
                     _teams = teams;
                     _seriesKind = kind;
                     _series = kind > 0;
                     // 그랑프리 도중에는 트랙이 정해진 순서대로 (방장이 못 바꿈)
-                    if (IsGp && _seriesRaces > 0 && !_seriesOver) _track = _gpTracks[_seriesRaces];
+                    if (IsGp) _track = _seriesRaces > 0 && !_seriesOver ? _gpTracks[_seriesRaces] : GpTrackIds[0];
+                    else if (GpTrackIds.Contains(_track)) _track = 0;   // 그랑프리 코스는 그랑프리 모드에서만
                     if (_teams) BalanceTeamsLocked();
                     BroadcastRosterLocked();
                     break;
@@ -340,7 +344,7 @@ public sealed class Room
                     break;
                 }
 
-                case "lap" when racing && !isBot && _mode == "speed":
+                case "lap" when racing && !isBot && _mode != "item":
                 {
                     // 한 바퀴 기록 (사람·스피드전만)
                     long time = (long?)m["time"] ?? 0;
@@ -467,16 +471,11 @@ public sealed class Room
         _gpTracks.Clear();
     }
 
-    /// <summary>그랑프리 4라운드 트랙: 고른 트랙 → 다른 트랙 2개(무작위) → 마지막은 그랑프리 서킷</summary>
+    /// <summary>그랑프리 4라운드: 그랑프리 전용 긴 코스를 1라운드부터 차례로</summary>
     private void PlanGpLocked()
     {
         _gpTracks.Clear();
-        _gpTracks.Add(_track);
-        var others = Enumerable.Range(0, TrackCount).Where(i => i != _track && i != GpCircuit)
-                               .OrderBy(_ => Random.Shared.Next()).ToList();
-        int need = _track == GpCircuit ? GpRounds - 1 : GpRounds - 2;
-        _gpTracks.AddRange(others.Take(need));
-        if (_track != GpCircuit) _gpTracks.Add(GpCircuit);
+        _gpTracks.AddRange(GpTrackIds);
         SystemChatLocked("그랑프리 시작! " + string.Join(" → ", _gpTracks.Select(i => TrackNames[i])));
     }
 

@@ -444,7 +444,9 @@ $('name').addEventListener('change', () => {
   net.send({ t: 'name', name: myName });
 });
 
-TRACKS.forEach((t, i) => $('track').add(new Option(t.name, i)));
+// 그랑프리 전용 코스는 목록에 숨겨 둠 (그랑프리 모드일 때 진행 중인 코스 이름만 보이게)
+TRACKS.forEach((t, i) => { const o = new Option(t.gp ? `${t.name} (그랑프리)` : t.name, i); o.hidden = !!t.gp; $('track').add(o); });
+const GP_COURSE = TRACKS.filter((t) => t.gp).map((t) => t.name);
 for (let i = 1; i <= 5; i++) $('laps').add(new Option(`${i}바퀴`, i));
 const sendCfg = () => net.send({
   t: 'cfg', track: +$('track').value, laps: +$('laps').value, mode: $('mode').value,
@@ -605,14 +607,16 @@ function renderLobby() {
   $('laps').value = roster.laps;
   $('mode').value = roster.mode ?? 'speed';
   $('teams').value = roster.teams ? '1' : '0';
-  $('series').value = String(roster.series?.on ? roster.series.kind ?? 1 : 0);
+  const gpMode = roster.mode === 'gp';
+  $('series').value = roster.series?.on && !gpMode ? '1' : '0';
   for (const id of ['track', 'laps', 'mode', 'teams', 'series']) $(id).disabled = !host;
-  if (gpRunning(roster.series)) $('track').disabled = true;   // 그랑프리 도중엔 트랙이 정해진 순서대로
+  if (gpMode) { $('track').disabled = true; $('series').disabled = true; }   // 그랑프리는 코스·방식이 정해져 있음
   const sText = seriesText(roster.series, roster.teams);
   $('seriesStatus').classList.toggle('hidden', !sText);
   $('seriesStatus').textContent = sText;
   const feat = TRACKS[roster.track].features?.note;
-  $('trackDesc').textContent = TRACKS[roster.track].desc + (feat ? ` · 특징: ${feat}` : '') + (roster.mode === 'item'
+  $('trackDesc').textContent = (gpMode ? `그랑프리 코스: ${GP_COURSE.join(' → ')} · 지금: ` : '')
+    + TRACKS[roster.track].desc + (feat ? ` · 특징: ${feat}` : '') + (roster.mode === 'item'
     ? ' · 아이템전: ? 상자를 먹고 Shift/E 로 사용'
     : '') + (roster.teams ? ' · 팀전: 순위 점수(1위 10, 2위 8, 3위 6…)의 합으로 승부' : '');
   renderRecords();
@@ -641,7 +645,7 @@ const gpRunning = (S) => isGp(S) && S.races > 0 && !S.over;
 function seriesText(S, teams) {
   if (!S?.on) return '';
   if (isGp(S)) {
-    if (S.races === 0) return `그랑프리: ${S.max}라운드 포인트 합산 (1위 10, 2위 8, 3위 6…). 고른 트랙 → 무작위 2곳 → 마지막은 그랑프리 서킷`;
+    if (S.races === 0) return `그랑프리: 긴 코스 ${S.max}곳을 차례로 달려 포인트 합산 (1위 10, 2위 8, 3위 6…)`;
     if (S.over) return '지난 그랑프리가 끝났어요. 시작하면 새 그랑프리가 시작돼요.';
     const next = `${S.races + 1}/${S.max}라운드 ${TRACKS[S.tracks[S.races]]?.name ?? ''} 준비 중`;
     if (teams) return `그랑프리 · ${next} · 레드 ${S.teamPoints[0]}점 : ${S.teamPoints[1]}점 블루`;
@@ -739,7 +743,7 @@ function renderRecords() {
   const list = records[roster.track] ?? [];
   const ol = $('recordList');
   ol.innerHTML = '';
-  $('recordTitle').textContent = `${TRACKS[roster.track].name} 랭킹 (스피드전 한 바퀴)`;
+  $('recordTitle').textContent = `${TRACKS[roster.track].name} 랭킹 (스피드전·그랑프리 한 바퀴)`;
   if (!list.length) {
     const li = document.createElement('li');
     li.className = 'empty';

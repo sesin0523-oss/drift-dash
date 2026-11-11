@@ -15,7 +15,24 @@ export const CAR = {
   grip: 9.0,             // 평소 옆미끄럼 억제
   driftGrip: 1.7,        // 드리프트(Space) 중 옆미끄럼 억제
   offroadGrip: 5.0,
+  chargeRate: 1,         // 미니 터보 모이는 속도
+  mass: 1,               // 무게: 무거우면 덜 밀리고 상대를 더 밀어냄
+  spinTime: 1,           // 스핀 시간 배율
 };
+
+/** 차 종류. stats 에 적은 값만 기본(CAR)에서 바뀐다. bars 는 로비 표시용 (0~5) */
+export const CAR_TYPES = [
+  { name: '밸런스', desc: '무난한 기본 차', stats: {},
+    bars: { 속도: 3, 코너: 3, 드리프트: 3, 무게: 3 } },
+  { name: '스피드', desc: '최고 속도가 높지만 코너가 둔함', stats: { maxSpeed: 690, accel: 520, steer: 2.85, grip: 8.2, chargeRate: 0.9, mass: 0.9 },
+    bars: { 속도: 5, 코너: 2, 드리프트: 2, 무게: 2 } },
+  { name: '드리프트', desc: '잘 미끄러지고 미니 터보가 빨리 참', stats: { maxSpeed: 625, accel: 570, steer: 3.4, driftGrip: 1.25, chargeRate: 1.45, mass: 0.95 },
+    bars: { 속도: 2, 코너: 4, 드리프트: 5, 무게: 2 } },
+  { name: '탱크', desc: '무거워서 잘 안 밀리고 스핀도 잘 안 당함', stats: { maxSpeed: 615, accel: 500, steer: 2.95, grip: 10.5, chargeRate: 0.85, mass: 1.6, spinMinSpeed: 230, spinTime: 0.7 },
+    bars: { 속도: 2, 코너: 3, 드리프트: 1, 무게: 5 } },
+];
+
+export const carSpec = (type) => ({ ...CAR, ...(CAR_TYPES[type] ?? CAR_TYPES[0]).stats });
 
 /** 회전된 직사각형(OBB): 중심, 앞 방향 축, 옆 방향 축, 반길이/반폭 */
 function box(c) {
@@ -62,7 +79,10 @@ export function boxCollide(A, B) {
 }
 
 export class Car {
-  constructor(track, slot) {
+  constructor(track, slot, type = 0) {
+    this.type = type;
+    this.spec = carSpec(type);
+    this.mass = this.spec.mass;
     const g = gridSlot(track, slot);
     this.x = g.x; this.y = g.y; this.a = g.a;
     this.vx = 0; this.vy = 0;
@@ -93,13 +113,14 @@ export class Car {
   /** 상대가 내 뒤 모서리를 박았을 때. side: 맞은 쪽(-1/1), power: 박은 속도 */
   applySpin(side, power) {
     if (this.spin > 0 || this.immune > 0 || this.finished) return false;
+    if (power < this.spec.spinMinSpeed) return false;   // 탱크는 웬만큼 세게 박아야 돎
     if (this.shield > 0) {           // 보호막이 한 번 막아 줌
       this.shield = 0;
       this.shieldPopped = true;
       this.immune = 0.8;
       return false;
     }
-    this.spin = 0.9 + Math.min(0.5, power / 1000);
+    this.spin = (0.9 + Math.min(0.5, power / 1000)) * this.spec.spinTime;
     this.spinRate = -side * (9 + Math.min(6, power / 80));
     this.vx *= 0.6;
     this.vy *= 0.6;
@@ -115,6 +136,7 @@ export class Car {
    * others: 다른 차들 [{x, y, vx, vy}] — 부딪히면 밀려남
    */
   step(input, dt, track, others, raceTimeMs) {
+    const S = this.spec;   // 이 차 종류의 능력치
     // 스핀 중: 조작 불가, 빙글빙글 돌며 미끄러짐
     if (this.immune > 0) this.immune -= dt;
     if (this.shield > 0) this.shield -= dt;
@@ -133,30 +155,30 @@ export class Car {
 
     // 최고 속도 (부스트 중엔 더 빠르고, 잔디에선 느림)
     if (this.boost > 0) this.boost -= dt;
-    const max = this.boost > 0 ? CAR.boostMax : this.offroad ? CAR.offroadMax : CAR.maxSpeed;
+    const max = this.boost > 0 ? S.boostMax : this.offroad ? S.offroadMax : S.maxSpeed;
 
     // 가속 / 브레이크 / 후진 — 최고 속도에 닿으면 더 가속하지 않음
     if (input.throttle) {
-      if (vf < 0) vf += CAR.brake * dt;
-      else if (vf < max) vf = Math.min(max, vf + CAR.accel * dt);
+      if (vf < 0) vf += S.brake * dt;
+      else if (vf < max) vf = Math.min(max, vf + S.accel * dt);
     }
-    if (input.brake) vf -= (vf > 0 ? CAR.brake : CAR.reverse) * dt;
-    if (!input.throttle && !input.brake && !spinning) vf -= Math.sign(vf) * Math.min(Math.abs(vf), CAR.roll * dt);
+    if (input.brake) vf -= (vf > 0 ? S.brake : S.reverse) * dt;
+    if (!input.throttle && !input.brake && !spinning) vf -= Math.sign(vf) * Math.min(Math.abs(vf), S.roll * dt);
     if (vf < -220) vf = -220;
-    if (this.boost > 0 && vf < max) vf = Math.min(max, vf + CAR.boostAccel * dt);
+    if (this.boost > 0 && vf < max) vf = Math.min(max, vf + S.boostAccel * dt);
 
     // 최고 속도를 넘었으면(부스트가 끝났거나 잔디로 나감) 서서히 줄어듦
     if (vf > max) vf -= (vf - max) * Math.min(1, (this.offroad ? 4 : 2) * dt);
 
     // 조향: 느릴 땐 잘 안 돌고, 아주 빠르면 조금 덜 돈다
-    const speedFactor = Math.min(1, Math.abs(vf) / 160) * (1 - 0.3 * Math.min(1, Math.abs(vf) / CAR.boostMax));
-    let turn = input.steer * CAR.steer * speedFactor * Math.sign(vf || 1);
+    const speedFactor = Math.min(1, Math.abs(vf) / 160) * (1 - 0.3 * Math.min(1, Math.abs(vf) / S.boostMax));
+    let turn = input.steer * S.steer * speedFactor * Math.sign(vf || 1);
     if (input.handbrake) turn *= 1.3;
     this.a += turn * dt;
 
     // 옆미끄럼 줄이기 (접지력)
     // 스핀 중엔 거의 미끄러지기만 해서 속도가 어느 정도 남는다
-    const grip = spinning ? 0.6 : input.handbrake ? CAR.driftGrip : this.offroad ? CAR.offroadGrip : CAR.grip;
+    const grip = spinning ? 0.6 : input.handbrake ? S.driftGrip : this.offroad ? S.offroadGrip : S.grip;
     vr *= Math.exp(-grip * dt);
     if (input.handbrake) vf *= 1 - 0.35 * dt;
 
@@ -165,7 +187,7 @@ export class Car {
     if (spinning) {
       this.driftCharge = 0;
     } else if (input.handbrake && this.drifting) {
-      this.driftCharge += dt;
+      this.driftCharge += dt * S.chargeRate;
     } else if (!input.handbrake) {
       if (this.driftCharge > 0.7) this.boost = Math.max(this.boost, Math.min(1.1, 0.35 + this.driftCharge * 0.35));
       this.driftCharge = 0;
@@ -222,18 +244,23 @@ export class Car {
       const col = boxCollide(box(this), box(o));
       if (!col) continue;
 
-      // n 은 나→상대 방향. 나를 반대로 밀어냄
+      // n 은 나→상대 방향. 나를 반대로 밀어냄. 무게가 다르면 가벼운 쪽이 더 밀림
+      // (상대도 자기 화면에서 똑같이 자기를 밀어내므로 둘의 몫을 합치면 2배)
+      const share = Math.max(0.4, Math.min(1.6, (2 * (o.mass ?? 1)) / ((o.mass ?? 1) + this.mass)));
       const nx = -col.nx, ny = -col.ny;
-      this.x += nx * col.depth;
-      this.y += ny * col.depth;
+      this.x += nx * col.depth * share;
+      this.y += ny * col.depth * share;
 
       const ovx = o.vx || 0, ovy = o.vy || 0;
       const rel = (this.vx - ovx) * nx + (this.vy - ovy) * ny;   // < 0 이면 서로 다가가는 중
       if (rel < 0) {
-        this.vx -= nx * rel * 1.1;
-        this.vy -= ny * rel * 1.1;
+        this.vx -= nx * rel * 1.1 * share;
+        this.vy -= ny * rel * 1.1 * share;
         this.bumped = Math.max(this.bumped, -rel);
       }
+
+      // 같은 팀은 스핀시키지 않음 (팀전)
+      if (o.team != null && o.team >= 0 && o.team === this.team) continue;
 
       // 스핀 판정: 접촉점이 상대 차의 뒤쪽 모서리이고, 내 차의 앞부분인지
       const { cx, cy } = col;

@@ -1,22 +1,25 @@
 // Drift Dash 메인: 로비 → 카운트다운 → 레이스 → 결과
-// 내 차는 내 브라우저에서 계산(렉 없음), 상대 차는 서버가 중계한 위치를 보간해서 그림.
+// 내 차는 내 브라우저에서, AI 봇은 방장 브라우저에서 계산한다.
+// 다른 사람의 차(사람·봇)는 서버가 중계한 위치를 보간해서 그린다.
 
 import { TRACKS, buildTrack } from './track.js';
-import { Car } from './car.js';
+import { Car, CAR_TYPES, carSpec } from './car.js';
 import { Net, RemoteCar } from './net.js';
-import { Renderer, COLORS, fmtTime } from './render.js';
+import { Renderer, COLORS, TEAM_COLORS, TEAM_NAMES, fmtTime } from './render.js';
 import { Sound } from './audio.js';
 import { Chat } from './chat.js';
 import { Items, drawIcon, ITEM_NAMES } from './items.js';
+import { Bot, BOT_LEVELS } from './bot.js';
 
 const DT = 1 / 60;
+const PLACE_POINTS = [10, 8, 6, 5, 4, 3];   // 팀전 순위 점수
 const $ = (id) => document.getElementById(id);
 const store = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* 무시 */ } },
 };
 
-// ───────────────────────── 방 코드 / 이름 ─────────────────────────
+// ───────────────────────── 방 코드 / 이름 / 차 ─────────────────────────
 
 const params = new URLSearchParams(location.search);
 let roomCode = (params.get('room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -25,6 +28,7 @@ if (roomCode.length < 3) {
   history.replaceState(null, '', `?room=${roomCode}`);
 }
 let myName = store.get('dd-name') || `드라이버${Math.floor(Math.random() * 90 + 10)}`;
+let myCar = Math.max(0, Math.min(CAR_TYPES.length - 1, +(store.get('dd-car') ?? 0) || 0));
 
 // ───────────────────────── 상태 ─────────────────────────
 
@@ -33,15 +37,15 @@ const renderer = new Renderer($('game'));
 const sound = new Sound();
 
 let me = 0;
-let roster = { host: 0, phase: 'lobby', track: 0, laps: 3, players: [] };
+let roster = { host: 0, phase: 'lobby', track: 0, laps: 3, mode: 'speed', teams: false, players: [] };
 let mode = 'lobby';            // lobby | race | results
 let race = null;               // 진행 중인 레이스
-let remotes = new Map();       // id → RemoteCar
+let remotes = new Map();       // id → RemoteCar (다른 사람, 그리고 내가 방장이 아니면 봇도)
 const trackCache = new Map();
-let lanBase = null;            // localhost 로 열었을 때 친구에게 줄 주소
-let banner = null;             // { text, until, color }
+let lanBase = null;
+let banner = null;
 let lastCount = null;
-let records = [];              // 트랙별 TOP 10 [{name, time}]
+let records = [];
 let ghostOn = store.get('dd-ghost') !== '0';
 
 const getTrack = (i) => {
@@ -50,29 +54,33 @@ const getTrack = (i) => {
 };
 const playerOf = (id) => roster.players.find((p) => p.id === id);
 const isHost = () => roster.host === me;
+const teamOf = (id) => (race?.teams ? playerOf(id)?.team ?? -1 : -1);
+const sameTeam = (a, b) => race?.teams && teamOf(a) >= 0 && teamOf(a) === teamOf(b);
 
-// ───────────────────────── 입력 ─────────────────────────
+// ───────────────────────── 입력 (키보드 + 터치) ─────────────────────────
 
 const keys = new Set();
+const touch = { active: false, steer: 0, brake: false, drift: false };
 
 const chat = new Chat({
   send: (text) => net.send({ t: 'chat', text }),
   colorOf: (c) => COLORS[(c ?? 0) % COLORS.length],
-  onOpenChange: () => keys.clear(),            // 채팅 여닫을 때 눌려 있던 키 초기화
+  onOpenChange: () => keys.clear(),
   onIncoming: (m) => { if (m.id !== me) sound.beep(1320, 0.06, 'sine', 0.12); },
 });
 
 function placeChat() {
   chat.placeIn(mode === 'lobby' ? $('lobby') : mode === 'results' ? $('results') : null);
 }
-const touch = { left: false, right: false, brake: false, drift: false, active: false };
-const GAME_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'ShiftRight', 'KeyE'];
+
+const GAME_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD',
+                   'ShiftLeft', 'ShiftRight', 'KeyE', 'BracketLeft', 'BracketRight'];
 const ITEM_KEYS = ['ShiftLeft', 'ShiftRight', 'KeyE'];   // Ctrl 은 W 와 같이 누르면 탭이 닫혀서 안 씀
 
 addEventListener('keydown', (e) => {
   sound.unlock();
-  if (e.target.tagName === 'INPUT') return;
-  if (e.code === 'Enter' && chat.floating && !chat.isOpen) {   // 레이스 중 Enter → 채팅
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Enter' && chat.floating && !chat.isOpen) {
     e.preventDefault();
     chat.open();
     return;
@@ -86,19 +94,54 @@ addEventListener('keydown', (e) => {
     if (mode === 'race') showBanner(ghostOn ? '고스트 켬' : '고스트 끔', 900, '#ffffff');
   }
   if (ITEM_KEYS.includes(e.code) && !e.repeat) useItem();
+  // 관전 중: [ ] 또는 ← → 로 따라갈 차 바꾸기
+  if (spectating() && !e.repeat) {
+    if (e.code === 'BracketLeft' || e.code === 'ArrowLeft') cycleSpectate(-1);
+    if (e.code === 'BracketRight' || e.code === 'ArrowRight') cycleSpectate(1);
+  }
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 addEventListener('pointerdown', () => sound.unlock());
 
-// 휴대폰: 화면을 처음 만지면 터치 버튼 표시 (가속은 자동)
+// 휴대폰: 화면을 처음 만지면 터치 조작으로 전환
 addEventListener('touchstart', () => {
   if (!touch.active) {
     touch.active = true;
     updateTouchVisibility();
   }
 }, { passive: true });
-for (const btn of document.querySelectorAll('#touch button')) {
+
+// 왼쪽 조향 패드: 손가락을 처음 댄 곳에서 좌우로 끈 만큼 핸들 (아날로그)
+{
+  const pad = $('steerPad'), knob = $('steerKnob');
+  let pid = null, x0 = 0, RANGE = 70;
+  const move = (x) => {
+    touch.steer = Math.max(-1, Math.min(1, (x - x0) / RANGE));
+    knob.style.transform = `translateX(${touch.steer * RANGE}px)`;
+  };
+  pad.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    pid = e.pointerId;
+    try { pad.setPointerCapture(pid); } catch { /* 일부 브라우저는 실패할 수 있음 */ }
+    const r = pad.getBoundingClientRect();
+    RANGE = Math.max(36, Math.min(70, (r.width - 56) / 2));   // 패드 폭에 맞춘 조향 범위
+    x0 = Math.max(r.left + RANGE, Math.min(r.right - RANGE, e.clientX));
+    knob.style.left = `${x0 - r.left - 28}px`;
+    move(e.clientX);
+  });
+  pad.addEventListener('pointermove', (e) => { if (e.pointerId === pid) move(e.clientX); });
+  const end = (e) => {
+    if (e.pointerId !== pid) return;
+    pid = null;
+    touch.steer = 0;
+    knob.style.transform = 'translateX(0)';
+  };
+  pad.addEventListener('pointerup', end);
+  pad.addEventListener('pointercancel', end);
+}
+// 오른쪽 버튼: 브레이크·드리프트는 누르는 동안, 아이템은 누를 때 한 번
+for (const btn of document.querySelectorAll('#touch [data-k]')) {
   const k = btn.dataset.k;
   if (k === 'item') {
     btn.addEventListener('pointerdown', (e) => { e.preventDefault(); useItem(); });
@@ -110,23 +153,49 @@ for (const btn of document.querySelectorAll('#touch button')) {
   btn.addEventListener('pointercancel', set(false));
   btn.addEventListener('pointerleave', set(false));
 }
+
 function updateTouchVisibility() {
-  $('touch').classList.toggle('hidden', !(touch.active && mode === 'race'));
+  const driving = mode === 'race' && race?.car && !race.car.finished;
+  $('touch').classList.toggle('hidden', !(touch.active && driving));
+  $('itemBtn').classList.toggle('hidden', !race?.items);
   document.body.classList.toggle('touch', touch.active);
+  document.body.classList.toggle('racing', mode === 'race');
+  $('specBar').classList.toggle('hidden', !(mode === 'race' && spectating()));
 }
 
 function readInput() {
   const k = (c) => keys.has(c);
-  const left = k('ArrowLeft') || k('KeyA') || touch.left;
-  const right = k('ArrowRight') || k('KeyD') || touch.right;
-  const brake = k('ArrowDown') || k('KeyS') || touch.brake;
+  const kbSteer = ((k('ArrowRight') || k('KeyD')) ? 1 : 0) - ((k('ArrowLeft') || k('KeyA')) ? 1 : 0);
   return {
-    throttle: k('ArrowUp') || k('KeyW') || (touch.active && !touch.brake),
-    brake,
-    steer: (right ? 1 : 0) - (left ? 1 : 0),
+    throttle: k('ArrowUp') || k('KeyW') || (touch.active && !touch.brake),   // 터치는 가속 자동
+    brake: k('ArrowDown') || k('KeyS') || touch.brake,
+    steer: kbSteer || touch.steer,
     handbrake: k('Space') || touch.drift,
   };
 }
+
+// ───────────────────────── 관전 ─────────────────────────
+
+/** 내 차가 없거나(관전) 완주했으면 다른 차를 골라 볼 수 있음 */
+function spectating() {
+  return !!race && (!race.car || race.car.finished);
+}
+
+function cycleSpectate(dir) {
+  const ids = standings().map((s) => s.id).filter((id) => id !== me);
+  if (!ids.length) return;
+  const i = ids.indexOf(race.specId);
+  race.specId = ids[(i + dir + ids.length) % ids.length];
+  updateSpecBar();
+}
+
+function updateSpecBar() {
+  if (!race) return;
+  const p = playerOf(race.specId);
+  $('specName').textContent = p ? `${p.name}${p.bot ? ' (봇)' : ''}` : '1위 따라가기';
+}
+$('specPrev').addEventListener('click', () => cycleSpectate(-1));
+$('specNext').addEventListener('click', () => cycleSpectate(1));
 
 // ───────────────────────── 네트워크 ─────────────────────────
 
@@ -134,6 +203,7 @@ net.on('welcome', (m) => {
   me = m.you;
   roomCode = m.room;
   updateLink();
+  net.send({ t: 'car', car: myCar });
 });
 
 net.on('roster', (m) => {
@@ -145,9 +215,9 @@ net.on('roster', (m) => {
 net.on('race', (m) => startRace(m));
 
 net.on('st', (m) => {
-  if (!race || m.id === me) return;
+  if (!race || m.id === me || race.bots.some((b) => b.id === m.id)) return;
   let r = remotes.get(m.id);
-  if (!r) remotes.set(m.id, (r = new RemoteCar(m.id)));
+  if (!r) remotes.set(m.id, (r = makeRemote(m.id)));
   r.push(m);
 });
 
@@ -158,10 +228,7 @@ net.on('fin', (m) => {
   if (m.id !== me) showBanner(`${p ? p.name : '?'} 완주! (${m.place}위)`, 2000, '#ffffff');
 });
 
-/**
- * 내 차를 스핀시킴 (뒤 모서리 박힘 / 바나나 / 미사일 공통).
- * 스핀 중·직후거나 보호막이 있으면 막힘. 실제로 돌았으면 모두에게 알림.
- */
+/** 내 차를 스핀시킴 (뒤 모서리 박힘 / 바나나 / 미사일 공통). 실제로 돌았으면 모두에게 알림 */
 function spinMe(from, why, side = Math.random() < 0.5 ? -1 : 1, power = 420) {
   const car = race?.car;
   if (!car) return false;
@@ -180,10 +247,19 @@ function spinMe(from, why, side = Math.random() < 0.5 ? -1 : 1, power = 420) {
   return false;
 }
 
-// 누가 내 뒤 모서리를 박았다
-net.on('hit', (m) => spinMe(m.from, 'bump', m.side, m.power));
+/** 방장: 봇을 스핀시킴 */
+function spinBot(bot, from, why, side = Math.random() < 0.5 ? -1 : 1, power = 420) {
+  if (bot.car.applySpin(side, power)) net.send({ t: 'spun', from, why, as: bot.id });
+  bot.car.shieldPopped = false;
+}
 
-// 누군가 스핀 → 화면 위쪽 알림
+// 누가 뒤 모서리를 박았다 (목표가 내 봇이면 봇을, 아니면 나를)
+net.on('hit', (m) => {
+  const bot = race?.bots.find((b) => b.id === m.target);
+  if (bot) spinBot(bot, m.from, 'bump', m.side, m.power);
+  else spinMe(m.from, 'bump', m.side, m.power);
+});
+
 net.on('spun', (m) => {
   if (!race) return;
   const from = playerOf(m.from)?.name ?? '?', to = playerOf(m.id)?.name ?? '?';
@@ -195,17 +271,11 @@ net.on('spun', (m) => {
   if (m.from === me && m.id !== me) showBanner('명중! 상대가 돌았어요', 1400, '#ffc531');
 });
 
-// 아이템전: 다른 사람의 상자 줍기 / 바나나·미사일 / 맞음
-for (const t of ['box', 'obj', 'objHit']) net.on(t, (m) => race?.items?.onRemote(m, performance.now()));
+// 아이템전: 다른 사람(또는 다른 사람의 봇)이 보낸 아이템 이벤트 → 이 브라우저의 모든 아이템 판정기에
+for (const t of ['box', 'obj', 'objHit']) net.on(t, (m) => {
+  for (const it of localItems()) it.onRemote(m, performance.now());
+});
 
-function useItem() {
-  if (mode !== 'race' || !race?.items || !race.car || raceTime() < 0) return;
-  const st = standings();
-  const idx = st.findIndex((x) => x.id === me);
-  race.items.use(race.car, performance.now(), idx > 0 ? st[idx - 1].id : null);
-}
-
-// 내 랩 기록 결과
 net.on('lapres', (m) => {
   if (!m.ok || !m.rank) return;
   if (m.rank === 1) {
@@ -219,7 +289,10 @@ net.on('lapres', (m) => {
 
 net.on('results', (m) => showResults(m));
 net.on('chat', (m) => chat.add(m));
-net.on('left', (m) => remotes.delete(m.id));
+net.on('left', (m) => {
+  remotes.delete(m.id);
+  if (race) race.bots = race.bots.filter((b) => b.id !== m.id);
+});
 net.on('error', (m) => alert(m.msg));
 net.on('close', () => {
   $('disconnected').classList.remove('hidden');
@@ -239,10 +312,14 @@ $('name').addEventListener('change', () => {
 
 TRACKS.forEach((t, i) => $('track').add(new Option(t.name, i)));
 for (let i = 1; i <= 5; i++) $('laps').add(new Option(`${i}바퀴`, i));
-const sendCfg = () => net.send({ t: 'cfg', track: +$('track').value, laps: +$('laps').value, mode: $('mode').value });
-$('track').addEventListener('change', sendCfg);
-$('laps').addEventListener('change', sendCfg);
-$('mode').addEventListener('change', sendCfg);
+const sendCfg = () => net.send({
+  t: 'cfg', track: +$('track').value, laps: +$('laps').value, mode: $('mode').value, teams: $('teams').value === '1',
+});
+for (const id of ['track', 'laps', 'mode', 'teams']) $(id).addEventListener('change', sendCfg);
+
+$('spec').addEventListener('change', () => net.send({ t: 'spec', on: $('spec').checked }));
+for (const btn of document.querySelectorAll('[data-bot]'))
+  btn.addEventListener('click', () => net.send({ t: 'addBot', level: +btn.dataset.bot }));
 
 $('start').addEventListener('click', () => {
   sound.unlock();
@@ -262,6 +339,42 @@ $('copy').addEventListener('click', async () => {
   setTimeout(() => ($('copy').textContent = '복사'), 1500);
 });
 
+// 차 고르기 카드
+function renderCars() {
+  const box = $('cars');
+  box.innerHTML = '';
+  CAR_TYPES.forEach((ct, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'car-card' + (i === myCar ? ' selected' : '');
+    const title = document.createElement('div');
+    title.className = 'car-name';
+    title.textContent = ct.name;
+    const desc = document.createElement('div');
+    desc.className = 'car-desc';
+    desc.textContent = ct.desc;
+    const bars = document.createElement('div');
+    bars.className = 'car-bars';
+    for (const [label, v] of Object.entries(ct.bars)) {
+      const row = document.createElement('div');
+      row.className = 'bar-row';
+      row.innerHTML = '<span></span><i><b></b></i>';
+      row.querySelector('span').textContent = label;
+      row.querySelector('b').style.width = `${v * 20}%`;
+      bars.append(row);
+    }
+    b.append(title, desc, bars);
+    b.addEventListener('click', () => {
+      if (roster.phase === 'race') return;
+      myCar = i;
+      store.set('dd-car', i);
+      net.send({ t: 'car', car: i });
+      renderCars();
+    });
+    box.append(b);
+  });
+}
+
 function shareBase() {
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
   return local && lanBase ? lanBase : location.origin;
@@ -272,12 +385,12 @@ function updateLink() {
   $('link').value = `${shareBase()}/?room=${roomCode}`;
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
   $('linkHint').textContent = local
-    ? (lanBase ? '같은 와이파이에 있는 친구가 열 수 있는 주소예요. 다른 곳의 친구는 README의 "인터넷으로 공개하기"를 보세요.'
-               : '이 PC에서만 열리는 주소예요.')
+    ? (lanBase ? '같은 와이파이에 있는 친구가 열 수 있는 주소예요. 다른 곳의 친구는 README를 보세요.' : '이 PC에서만 열리는 주소예요.')
     : '이 링크를 보내면 친구가 같은 방으로 들어와요.';
 }
 
 function renderLobby() {
+  const host = isHost();
   const ul = $('players');
   ul.innerHTML = '';
   for (const p of roster.players) {
@@ -287,27 +400,64 @@ function renderLobby() {
     dot.style.background = COLORS[p.color % COLORS.length];
     const name = document.createElement('span');
     name.textContent = p.name;
+    const carTag = document.createElement('span');
+    carTag.className = 'car-tag';
+    carTag.textContent = CAR_TYPES[p.car]?.name ?? '';
     const tag = document.createElement('span');
     tag.className = 'tag';
-    tag.textContent = [p.id === me ? '나' : '', p.id === roster.host ? '방장' : '', p.inRace && roster.phase === 'race' ? '레이스 중' : '']
-      .filter(Boolean).join(' · ');
-    li.append(dot, name, tag);
+    tag.textContent = [
+      p.id === me ? '나' : '', p.id === roster.host ? '방장' : '',
+      p.bot ? `봇·${BOT_LEVELS[p.level]?.name}` : '', p.spec ? '관전' : '',
+      p.inRace && roster.phase === 'race' ? '레이스 중' : '',
+    ].filter(Boolean).join(' · ');
+    li.append(dot, name, carTag, tag);
+
+    // 팀전: 팀 배지 (나 또는 방장이 봇 것을 누르면 팀 바꾸기)
+    if (roster.teams && !p.spec) {
+      const team = document.createElement('button');
+      team.type = 'button';
+      team.className = 'team-badge';
+      team.textContent = p.team >= 0 ? TEAM_NAMES[p.team] : '팀?';
+      team.style.background = p.team >= 0 ? TEAM_COLORS[p.team] : '#666';
+      const canChange = roster.phase !== 'race' && (p.id === me || (p.bot && host));
+      team.disabled = !canChange;
+      team.title = canChange ? '눌러서 팀 바꾸기' : '';
+      team.addEventListener('click', () => {
+        if (p.bot) net.send({ t: 'botTeam', id: p.id });
+        else net.send({ t: 'team', team: p.team === 0 ? 1 : 0 });
+      });
+      li.append(team);
+    }
+    if (p.bot && host && roster.phase !== 'race') {
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'remove-bot';
+      x.textContent = '✕';
+      x.title = '봇 빼기';
+      x.addEventListener('click', () => net.send({ t: 'removeBot', id: p.id }));
+      li.append(x);
+    }
     ul.append(li);
   }
 
   $('track').value = roster.track;
   $('laps').value = roster.laps;
   $('mode').value = roster.mode ?? 'speed';
-  $('track').disabled = $('laps').disabled = $('mode').disabled = !isHost();
+  $('teams').value = roster.teams ? '1' : '0';
+  for (const id of ['track', 'laps', 'mode', 'teams']) $(id).disabled = !host;
   $('trackDesc').textContent = TRACKS[roster.track].desc + (roster.mode === 'item'
-    ? ' · 아이템전: ? 상자를 먹고 Shift/E 로 사용 (바나나·미사일·보호막·부스터)'
-    : '');
+    ? ' · 아이템전: ? 상자를 먹고 Shift/E 로 사용'
+    : '') + (roster.teams ? ' · 팀전: 순위 점수(1위 10, 2위 8, 3위 6…)의 합으로 승부' : '');
   renderRecords();
 
-  const host = isHost();
+  const meP = playerOf(me);
+  $('spec').checked = !!meP?.spec;
+  $('botControls').classList.toggle('hidden', !host || roster.phase === 'race');
+
+  const racers = roster.players.filter((p) => !p.spec).length;
   $('start').classList.toggle('hidden', !host);
   $('start').disabled = roster.phase === 'race';
-  $('start').textContent = roster.players.length > 1 ? `레이스 시작 (${roster.players.length}명)` : '혼자 연습 시작';
+  $('start').textContent = racers > 1 ? `레이스 시작 (${racers}대)` : '혼자 연습 시작';
   const hostName = playerOf(roster.host)?.name ?? '방장';
   $('waitHost').textContent = host ? '' : roster.phase === 'race'
     ? '레이스가 진행 중이에요. 끝나면 다음 레이스에 참가할 수 있어요.'
@@ -361,86 +511,183 @@ function enterLobby() {
   updateTouchVisibility();
 }
 
-// ───────────────────────── 레이스 ─────────────────────────
+// ───────────────────────── 레이스 시작 ─────────────────────────
+
+function makeRemote(id) {
+  const r = new RemoteCar(id);
+  const p = playerOf(id);
+  r.type = p?.car ?? 0;
+  r.mass = carSpec(r.type).mass;
+  r.team = race?.teams ? p?.team ?? -1 : -1;
+  return r;
+}
 
 function startRace(m) {
   const track = getTrack(m.track);
   const slot = m.grid.indexOf(me);
+  const myP = playerOf(me);
   race = {
-    id: m.raceId, track, laps: m.laps, startAt: m.startAt, grid: m.grid,
-    car: slot >= 0 ? new Car(track, slot) : null,   // 경기 중에 들어왔으면 관전
+    id: m.raceId, track, laps: m.laps, startAt: m.startAt, grid: m.grid, mode: m.mode, teams: !!m.teams,
+    car: slot >= 0 ? new Car(track, slot, myP?.car ?? myCar) : null,   // 경기 중에 들어왔거나 관전이면 null
+    bots: [],             // 방장일 때 내가 운전하는 봇들
     finishers: [], myTime: null, sendTick: 0, bestLap: null, prevBoost: 0,
-    hitCooldown: new Map(), feed: [], mode: m.mode,
+    hitCooldown: new Map(), feed: [],
     items: null,
-    ghost: null,          // 트랙 1위의 주행 경로 (스피드전)
-    ghostRec: [],         // 이번 바퀴 내 주행 기록 [x, y, a, ...] 0.1초 간격
+    ghost: null, ghostRec: [],
+    specId: null,
   };
+  if (race.car) {
+    race.car.id = me;
+    race.car.team = race.teams ? myP?.team ?? -1 : -1;
+  }
+
+  // 봇: 방장 브라우저가 운전
+  if (isHost()) {
+    m.grid.forEach((id, s) => {
+      const p = playerOf(id);
+      if (!p?.bot) return;
+      const bot = new Bot(p, track, s);
+      bot.car.team = race.teams ? p.team : -1;
+      race.bots.push(bot);
+    });
+  }
+
   if (m.mode !== 'item') {
     fetch(`/api/ghost/${m.track}`).then((r) => (r.ok ? r.json() : null)).then((g) => {
       if (race && race.id === m.raceId) race.ghost = g;
     }).catch(() => { /* 기록 없음 */ });
+  } else {
+    // 아이템 판정기: 나 + 내 봇마다 하나씩. 이 브라우저 안에서 생긴 아이템 이벤트는 서로에게 바로 전달
+    if (race.car) {
+      race.items = new Items(track, me, {
+        send: (msg) => { net.send(msg); deliverLocal(msg, me); },
+        hitMe: (from, why) => spinMe(from, why),
+        sfx: (name) => sound.sfx(name),
+        banner: (text, color) => showBanner(text, 1400, color),
+        sameTeam: (owner) => sameTeam(owner, me),
+      });
+    }
+    for (const bot of race.bots) {
+      bot.items = new Items(track, bot.id, {
+        send: (msg) => { net.send({ ...msg, as: bot.id }); deliverLocal(msg, bot.id); },
+        hitMe: (from, why) => spinBot(bot, from, why),
+        sfx: () => {},
+        banner: () => {},
+        sameTeam: (owner) => sameTeam(owner, bot.id),
+      });
+    }
+    // 관전자: 판정은 안 하고 상자·바나나·미사일을 보여 주기만 하는 판정기
+    if (!race.car && !race.bots.length) {
+      race.specItems = new Items(track, 0, { send() {}, hitMe() {}, sfx() {}, banner() {} });
+    }
   }
-  if (m.mode === 'item') {
-    race.items = new Items(track, me, {
-      send: (msg) => net.send(msg),
-      hitMe: (from, why) => spinMe(from, why),
-      sfx: (name) => sound.sfx(name),
-      banner: (text, color) => showBanner(text, 1400, color),
-    });
-  }
+
   remotes = new Map();
   m.grid.forEach((id, s) => {
-    if (id === me) return;
-    const r = new RemoteCar(id);
+    if (id === me || race.bots.some((b) => b.id === id)) return;
+    const r = makeRemote(id);
     const g = new Car(track, s);     // 출발 위치에 미리 세워 두기
     Object.assign(r, { x: g.x, y: g.y, a: g.a, visible: true });
     remotes.set(id, r);
   });
+
   renderer.clearMarks();
-  renderer.follow(race.car ?? remotes.values().next().value, 0, true);
+  renderer.follow(race.car ?? race.bots[0]?.car ?? remotes.values().next().value, 0, true);
   mode = 'race';
   lastCount = null;
   banner = null;
   $('lobby').classList.add('hidden');
   $('results').classList.add('hidden');
   placeChat();
+  updateSpecBar();
   updateTouchVisibility();
 }
 
 function raceTime() { return race ? net.serverNow() - race.startAt : 0; }
+
+/** 이 브라우저 안의 아이템 판정기들 (나 + 내 봇들) */
+function localItems() {
+  if (!race) return [];
+  const list = race.bots.map((b) => b.items).filter(Boolean);
+  if (race.items) list.push(race.items);
+  if (race.specItems) list.push(race.specItems);
+  return list;
+}
+
+/** 이 브라우저 안에서 생긴 아이템 이벤트를, 보낸 쪽을 뺀 나머지 판정기에 바로 전달 */
+function deliverLocal(msg, senderId) {
+  for (const it of localItems()) if (it.me !== senderId) it.onRemote({ ...msg, id: senderId }, performance.now());
+}
+
+/** 모든 차 (id → 차). 아이템 미사일 목표 찾기 등에 사용 */
+function allCars() {
+  const map = new Map();
+  for (const r of remotes.values()) if (r.visible) map.set(r.id, r);
+  for (const b of race.bots) map.set(b.id, b.car);
+  if (race.car) map.set(me, race.car);
+  return map;
+}
+
+/** selfId 와 부딪힐 수 있는 차들 (완주한 차는 유령처럼 통과) */
+function collidables(selfId, cars) {
+  const out = [];
+  for (const [id, c] of cars) if (id !== selfId && !c.finished) out.push(c);
+  return out;
+}
+
+/** selfId 바로 앞 순위의 상대 팀 차 (미사일 목표) */
+function aheadTarget(selfId, st) {
+  const i = st.findIndex((s) => s.id === selfId);
+  for (let k = i - 1; k >= 0; k--) if (!sameTeam(st[k].id, selfId)) return st[k].id;
+  return null;
+}
+
+function placeOf(selfId, st) {
+  const i = st.findIndex((s) => s.id === selfId);
+  return st.length > 1 && i >= 0 ? i / (st.length - 1) : 0;   // 0 = 1등, 1 = 꼴찌
+}
+
+function carState(c, now) {
+  const r1 = (v) => Math.round(v * 10) / 10;
+  return {
+    t: 'st', ts: Math.round(now),
+    x: r1(c.x), y: r1(c.y), a: Math.round(c.a * 1000) / 1000, vx: r1(c.vx), vy: r1(c.vy),
+    d: c.drifting, b: c.boost > 0, sp: c.spin > 0, sh: c.shield > 0,
+    p: c.progress(race.track), lap: c.lap, fin: c.finished,
+  };
+}
+
+// ───────────────────────── 매 프레임 ─────────────────────────
 
 function stepRace() {
   const car = race.car;
   const t = raceTime();
   const now = net.serverNow();
   for (const r of remotes.values()) r.update(now);
+  const cars = allCars();
+  const st = standings();
 
-  if (race.items) {
-    const st = standings();
-    const idx = st.findIndex((x) => x.id === me);
-    const place = st.length > 1 && idx >= 0 ? idx / (st.length - 1) : 0;   // 0 = 1등, 1 = 꼴찌
-    race.items.update(DT, performance.now(), car && t >= 0 ? car : null, remotes, place);
-  }
+  stepBots(t, now, cars, st);
 
+  if (race.items) race.items.update(DT, performance.now(), car && t >= 0 ? car : null, cars, placeOf(me, st));
+  race.specItems?.update(DT, performance.now(), null, cars, 0);
   if (!car) return;
+
   const canDrive = t >= 0 && !car.finished;
-  let input = canDrive ? readInput() : { throttle: false, brake: car.finished && car.speed > 30, steer: 0, handbrake: false };
-
-  const others = [...remotes.values()].filter((r) => r.visible);
+  const input = canDrive ? readInput() : { throttle: false, brake: car.finished && car.speed > 30, steer: 0, handbrake: false };
   const prev = { x: car.x, y: car.y, a: car.a };
-  car.step(input, DT, race.track, others, Math.max(0, t));
+  car.step(input, DT, race.track, car.finished ? [] : collidables(me, cars), Math.max(0, t));
 
-  // 내가 상대 뒤 모서리를 박았으면 → 서버를 거쳐 상대에게 (같은 상대는 1.2초에 한 번)
+  // 내가 상대 뒤 모서리를 박았으면 → 서버를 거쳐 상대(또는 봇의 주인)에게
   for (const h of car.hits) {
     const last = race.hitCooldown.get(h.id) ?? -1e9;
-    if (now - last < 1200) continue;
+    if (now - last < 1200 || sameTeam(h.id, me)) continue;
     race.hitCooldown.set(h.id, now);
     net.send({ t: 'hit', target: h.id, side: h.side, power: Math.round(h.power) });
     renderer.sparks(h.x, h.y);
     sound.clank();
   }
 
-  // 효과
   if (car.drifting) renderer.addSkid(car, prev);
   renderer.emitFor(car, DT);
   if (car.bumped > 140) {
@@ -455,19 +702,17 @@ function stepRace() {
   race.prevBoost = car.boost;
   sound.update(car.speed, input.throttle, car.drifting, car.boost > 0);
 
-  // 고스트용 주행 기록: 이번 바퀴 시작부터 0.1초마다 위치 하나
+  // 고스트용 주행 기록 (스피드전): 이번 바퀴 시작부터 0.1초마다 위치 하나
   if (race.mode !== 'item' && t >= 0 && !car.finished && !car.justLapped) {
     const lapElapsed = t - car.lapStart;
     while (race.ghostRec.length / 3 <= lapElapsed / 100)
       race.ghostRec.push(Math.round(car.x), Math.round(car.y), Math.round(car.a * 100) / 100);
   }
 
-  // 바퀴 / 완주
   if (car.justLapped) {
     car.justLapped = false;
     const lt = car.lapTimes[car.lapTimes.length - 1];
     if (race.bestLap == null || lt < race.bestLap) race.bestLap = lt;
-    // 스피드전이면 이 바퀴 기록 + 주행 경로를 서버 랭킹에 제출
     if (race.mode !== 'item') net.send({ t: 'lap', time: Math.round(lt), ghost: race.ghostRec });
     race.ghostRec = [];
     if (car.lap > race.laps) {
@@ -476,6 +721,9 @@ function stepRace() {
       net.send({ t: 'fin', time: Math.round(t) });
       sound.fanfare();
       showBanner('FINISH!', 4000, '#ffc531');
+      race.specId = null;
+      updateSpecBar();
+      updateTouchVisibility();
     } else if (car.lap === race.laps) {
       showBanner('마지막 바퀴!', 1800, '#ff5a4f');
       sound.beep(988, 0.25);
@@ -485,28 +733,86 @@ function stepRace() {
     }
   }
 
-  // 내 상태를 초당 20번 보냄
-  if (++race.sendTick % 3 === 0) {
-    const r1 = (v) => Math.round(v * 10) / 10;
-    net.send({
-      t: 'st', ts: Math.round(now),
-      x: r1(car.x), y: r1(car.y), a: Math.round(car.a * 1000) / 1000, vx: r1(car.vx), vy: r1(car.vy),
-      d: car.drifting, b: car.boost > 0, sp: car.spin > 0, sh: car.shield > 0,
-      p: car.progress(race.track), lap: car.lap, fin: car.finished,
-    });
+  if (++race.sendTick % 3 === 0) net.send(carState(car, now));   // 초당 20번
+}
+
+/** 방장: 봇 운전 + 위치 보내기 */
+function stepBots(t, now, cars, st) {
+  for (const bot of race.bots) {
+    const c = bot.car;
+    const others = c.finished ? [] : collidables(bot.id, cars);
+    const prev = { x: c.x, y: c.y, a: c.a };
+    const input = t >= 0 && !c.finished
+      ? bot.think(DT, others)
+      : { throttle: false, brake: c.finished && c.speed > 30, steer: 0, handbrake: false };
+    c.step(input, DT, race.track, others, Math.max(0, t));
+
+    for (const h of c.hits) {
+      const last = bot.hitCooldown.get(h.id) ?? -1e9;
+      if (now - last < 1200 || sameTeam(h.id, bot.id)) continue;
+      bot.hitCooldown.set(h.id, now);
+      net.send({ t: 'hit', target: h.id, side: h.side, power: Math.round(h.power), as: bot.id });
+      renderer.sparks(h.x, h.y);
+    }
+    c.bumped = 0;
+    if (c.drifting) renderer.addSkid(c, prev);
+    renderer.emitFor(c, DT);
+
+    if (c.justLapped) {
+      c.justLapped = false;
+      if (c.lap > race.laps) {
+        c.finished = true;
+        net.send({ t: 'fin', time: Math.round(t), as: bot.id });
+      }
+    }
+
+    if (bot.items) {
+      bot.items.update(DT, performance.now(), t >= 0 ? c : null, cars, placeOf(bot.id, st));
+      const fx = Math.cos(c.a), fy = Math.sin(c.a);
+      const behindClose = [...cars].some(([id, o]) => id !== bot.id && !sameTeam(id, bot.id)
+        && (o.x - c.x) * fx + (o.y - c.y) * fy < 0 && Math.hypot(o.x - c.x, o.y - c.y) < 250);
+      bot.thinkItem(DT, performance.now(), {
+        behindClose, aheadId: aheadTarget(bot.id, st), incomingMissile: !!bot.items.incomingMissile, curve: input.curve,
+      });
+    }
+
+    if (++bot.sendTick % 3 === 0) net.send({ ...carState(c, now), as: bot.id });
   }
+}
+
+function useItem() {
+  if (mode !== 'race' || !race?.items || !race.car || raceTime() < 0) return;
+  race.items.use(race.car, performance.now(), aheadTarget(me, standings()));
 }
 
 /** 순위: 완주한 순서 → 그다음 진행도 */
 function standings() {
   if (!race) return [];
   const finIndex = (id) => race.finishers.findIndex((f) => f.id === id);
-  const list = race.grid.filter((id) => id === me ? !!race.car : remotes.has(id)).map((id) => {
+  const list = [];
+  for (const id of race.grid) {
+    let prog;
+    if (id === me) { if (!race.car) continue; prog = race.car.progress(race.track); }
+    else {
+      const bot = race.bots.find((b) => b.id === id);
+      if (bot) prog = bot.car.progress(race.track);
+      else if (remotes.has(id)) prog = remotes.get(id).prog;
+      else continue;
+    }
     const fi = finIndex(id);
-    const prog = id === me ? race.car.progress(race.track) : remotes.get(id).prog;
-    return { id, score: fi >= 0 ? 1e12 - fi * 1e9 : prog };
-  });
+    list.push({ id, score: fi >= 0 ? 1e12 - fi * 1e9 : prog });
+  }
   return list.sort((a, b) => b.score - a.score);
+}
+
+/** 팀전 현재 점수 (지금 순위 기준) */
+function teamScores(order) {
+  const s = [0, 0];
+  order.forEach((id, i) => {
+    const team = teamOf(id);
+    if (team >= 0) s[team] += PLACE_POINTS[Math.min(i, PLACE_POINTS.length - 1)];
+  });
+  return s;
 }
 
 function showBanner(text, ms, color) {
@@ -521,14 +827,26 @@ function showResults(m) {
   const add = (place, id, name, time) => {
     const li = document.createElement('li');
     const p = playerOf(id);
-    li.innerHTML = `<span class="place">${place}</span><span class="dot"></span><span class="nm"></span><span class="time"></span>`;
+    li.innerHTML = '<span class="place"></span><span class="dot"></span><span class="nm"></span><span class="time"></span>';
+    li.querySelector('.place').textContent = place;
     li.querySelector('.dot').style.background = COLORS[(p?.color ?? 0) % COLORS.length];
-    li.querySelector('.nm').textContent = name + (id === me ? ' (나)' : '');
+    li.querySelector('.nm').textContent = name + (id === me ? ' (나)' : '') + (p?.bot ? ' · 봇' : '');
     li.querySelector('.time').textContent = time;
+    if (m.teams && p?.team >= 0) li.style.borderLeft = `5px solid ${TEAM_COLORS[p.team]}`;
     ol.append(li);
   };
   m.list.forEach((r, i) => add(i + 1, r.id, r.name, fmtTime(r.time)));
   m.dnf.forEach((r) => add('-', r.id, r.name, '완주 못함'));
+
+  const ts = $('teamScore');
+  ts.classList.toggle('hidden', !m.teams);
+  if (m.teams) {
+    const [r, b] = m.teamScore;
+    ts.innerHTML = '<span class="red"></span><span class="vs">:</span><span class="blue"></span><div class="who"></div>';
+    ts.querySelector('.red').textContent = `레드 ${r}`;
+    ts.querySelector('.blue').textContent = `${b} 블루`;
+    ts.querySelector('.who').textContent = r === b ? '무승부!' : r > b ? '레드 팀 승리!' : '블루 팀 승리!';
+  }
   renderLobby();
   $('results').classList.remove('hidden');
   placeChat();
@@ -539,13 +857,13 @@ function showResults(m) {
 
 function nameOf(c) {
   if (c.id === me) return null;
-  return playerOf(c.id)?.name ?? '';
+  const p = playerOf(c.id);
+  return p ? p.name : '';
 }
 
 function draw(time) {
   const t = time / 1000;
   if (mode === 'lobby' || !race) {
-    // 로비 배경: 트랙을 따라 천천히 날아다니는 카메라
     const track = getTrack(roster.track);
     const i = Math.floor(t * 18) % track.n, p = track.pts[i];
     renderer.follow({ x: p.x, y: p.y, vx: p.tx * 300, vy: p.ty * 300 }, DT);
@@ -553,15 +871,19 @@ function draw(time) {
     return;
   }
 
-  const track = race.track;
   const cars = [];
-  for (const r of remotes.values()) {
-    const p = playerOf(r.id);
-    if (r.visible && p) cars.push(Object.assign(r, { color: p.color }));
-  }
-  if (race.car) cars.push(Object.assign(race.car, { id: me, color: playerOf(me)?.color ?? 0 }));
+  const decorate = (c, id) => {
+    const p = playerOf(id);
+    c.id = id;
+    c.color = p?.color ?? 0;
+    c.type = p?.car ?? c.type ?? 0;
+    c.teamColor = race.teams && p?.team >= 0 ? TEAM_COLORS[p.team] : null;
+    cars.push(c);
+  };
+  for (const r of remotes.values()) if (r.visible && playerOf(r.id)) decorate(r, r.id);
+  for (const b of race.bots) decorate(b.car, b.id);
+  if (race.car) decorate(race.car, me);
 
-  // 상대 차 효과 (드리프트 자국, 부스트 불꽃)
   for (const r of remotes.values()) {
     if (r.drifting) renderer.addSkid(r, r.prevPos);
     renderer.emitFor({ ...r, offroad: false, driftCharge: 0, boost: r.boosting ? 1 : 0, speed: r.speed }, DT);
@@ -569,16 +891,21 @@ function draw(time) {
   }
 
   const st = standings();
-  const target = race.car ?? remotes.get(st[0]?.id);
+  let target = race.car;
+  if (spectating()) {
+    const id = race.specId ?? st.find((s) => s.id !== me)?.id;
+    target = cars.find((c) => c.id === id) ?? race.car ?? cars[0];
+    if (race.specId == null && id != null) { race.specId = id; updateSpecBar(); }
+  }
   renderer.follow(target, DT);
-  renderer.drawWorld(track, cars, nameOf, t, (ctx) => {
-    race.items?.draw(ctx, t, performance.now());
+  renderer.drawWorld(race.track, cars, nameOf, t, (ctx) => {
+    // 아이템 상자·바나나·미사일 (판정기들은 같은 이벤트를 받으므로 하나만 그리면 됨)
+    (race.items ?? localItems()[0])?.draw(ctx, t, performance.now());
     drawGhost(ctx);
   });
-  drawHud(st);
+  drawHud(st, cars);
 }
 
-/** 고스트: 트랙 1위가 달린 한 바퀴를, 내 이번 바퀴와 같은 시간으로 맞춰 반투명하게 재생 */
 function ghostPose() {
   const g = race.ghost, car = race.car;
   if (!g || !ghostOn || !car || car.finished) return null;
@@ -610,13 +937,13 @@ function drawGhost(ctx) {
   ctx.restore();
 }
 
-function drawHud(st) {
+function drawHud(st, cars) {
   const R = renderer;
   R.beginScreen();
   const car = race.car;
   const rt = raceTime();
-  const small = R.w < 600;
-  const s = small ? 0.8 : 1;
+  const s = R.w < 600 ? 0.78 : 1;
+  const bottomPad = touch.active && car && !car.finished ? 150 : 24;
 
   if (car) {
     const lap = Math.min(car.lap, race.laps);
@@ -630,37 +957,48 @@ function drawHud(st) {
       R.text(`트랙 기록 ${fmtTime(race.ghost.time)} · ${race.ghost.name}${ghostOn ? '' : ' (G: 고스트 켜기)'}`,
         20, (race.bestLap != null ? 158 : 138) * s, 14 * s, '#ffe08a', 'left', '600');
 
-    // 속도계 + 부스트/드리프트 게이지
-    const kmh = Math.round(car.speed * 0.36);
-    const bx = R.w - 20, by = R.h - (touch.active ? 130 : 24);
-    R.text(`${kmh}`, bx - 56, by, 42 * s, '#ffffff', 'right');
-    R.text('km/h', bx, by, 16 * s, '#cfd3da', 'right');
-    const charge = Math.min(1, car.driftCharge / 1.5);
-    if (car.driftCharge > 0.1 || car.boost > 0) {
-      const ctx = R.ctx, w = 150 * s;
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      ctx.beginPath(); ctx.roundRect(bx - w, by - 70 * s, w, 10, 5); ctx.fill();
-      ctx.fillStyle = car.boost > 0 ? '#ff8a3d' : charge >= 1 ? '#ff9a2e' : car.driftCharge > 0.7 ? '#4fb3ff' : '#9aa3b2';
-      ctx.beginPath(); ctx.roundRect(bx - w, by - 70 * s, w * (car.boost > 0 ? Math.min(1, car.boost) : charge), 10, 5); ctx.fill();
-      R.text(car.boost > 0 ? '부스트!' : '드리프트 터보', bx, by - 78 * s, 13 * s, '#ffffff', 'right', '600');
+    if (!car.finished) {
+      const kmh = Math.round(car.speed * 0.36);
+      const bx = R.w - 20, by = R.h - bottomPad;
+      R.text(`${kmh}`, bx - 56, by, 42 * s, '#ffffff', 'right');
+      R.text('km/h', bx, by, 16 * s, '#cfd3da', 'right');
+      const charge = Math.min(1, car.driftCharge / 1.5);
+      if (car.driftCharge > 0.1 || car.boost > 0) {
+        const ctx = R.ctx, w = 150 * s;
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath(); ctx.roundRect(bx - w, by - 70 * s, w, 10, 5); ctx.fill();
+        ctx.fillStyle = car.boost > 0 ? '#ff8a3d' : charge >= 1 ? '#ff9a2e' : car.driftCharge > 0.7 ? '#4fb3ff' : '#9aa3b2';
+        ctx.beginPath(); ctx.roundRect(bx - w, by - 70 * s, w * (car.boost > 0 ? Math.min(1, car.boost) : charge), 10, 5); ctx.fill();
+        R.text(car.boost > 0 ? '부스트!' : '드리프트 터보', bx, by - 78 * s, 13 * s, '#ffffff', 'right', '600');
+      }
     }
-  } else {
-    R.text('관전 중 · 다음 레이스부터 참가할 수 있어요', R.w / 2, 40, 18 * s, '#ffffff', 'center');
+  }
+  if (spectating()) {
+    const p = playerOf(race.specId);
+    R.text(car ? '완주! 다른 차를 보고 있어요' : '관전 중', R.w / 2, R.h - (touch.active ? 96 : 70), 16 * s, '#ffffff', 'center', '700');
+    if (p && !touch.active) R.text('[ ] 또는 ← → 로 다른 차 보기', R.w / 2, R.h - 48, 13 * s, '#cfd3da', 'center', '600');
   }
 
-  // 아이템 칸
-  if (race.items && car) drawItemSlot(R, s, rt);
+  if (race.items && car && !car.finished) drawItemSlot(R, s);
 
-  const mapBottom = R.minimap(race.track, [...remotes.values()].filter((r) => r.visible).concat(car ? [car] : []), me);
+  const mapBottom = R.minimap(race.track, cars, me);
 
-  // 완주자 목록 (미니맵 아래)
   const y = mapBottom + 26;
   race.finishers.forEach((f, i) => {
     const p = playerOf(f.id);
     R.text(`${i + 1}. ${p?.name ?? '?'}  ${fmtTime(f.time)}`, R.w - 20, y + i * 22, 15 * s, '#ffffff', 'right', '600');
   });
 
-  // 카운트다운
+  // 팀전: 현재 점수
+  let feedY = 34;
+  if (race.teams) {
+    const [r, b] = teamScores(st.map((x) => x.id));
+    R.text(`레드 ${r}`, R.w / 2 - 14, 34, 22 * s, TEAM_COLORS[0], 'right', '900');
+    R.text(':', R.w / 2, 34, 22 * s, '#ffffff', 'center', '900');
+    R.text(`${b} 블루`, R.w / 2 + 14, 34, 22 * s, TEAM_COLORS[1], 'left', '900');
+    feedY = 64;
+  }
+
   if (rt < 0) {
     const n = Math.ceil(-rt / 1000);
     if (n <= 3) {
@@ -675,24 +1013,22 @@ function drawHud(st) {
     R.text('GO!', R.w / 2, R.h / 2 + 30, 130 * s, '#ffc531', 'center', '900');
   }
 
-  // 스핀 알림 (화면 위 가운데)
   const nowMs = performance.now();
   race.feed = race.feed.filter((f) => f.until > nowMs);
-  race.feed.forEach((f, i) => R.text(f.text, R.w / 2, 34 + i * 24, 17 * s, f.mine ? '#ffc531' : '#ffffff', 'center', '700'));
+  race.feed.forEach((f, i) => R.text(f.text, R.w / 2, feedY + i * 24, 17 * s, f.mine ? '#ffc531' : '#ffffff', 'center', '700'));
 
-  if (banner && performance.now() < banner.until) {
-    const age = (performance.now() - banner.start) / 250;
-    const k = Math.min(1, age);
+  if (banner && nowMs < banner.until) {
+    const k = Math.min(1, (nowMs - banner.start) / 250);
     R.text(banner.text, R.w / 2, R.h * 0.28, (24 + 16 * k) * s, banner.color, 'center', '900');
   }
 
-  if (car && rt > 0 && rt < 6000 && !touch.active)
+  if (car && !car.finished && rt > 0 && rt < 6000 && !touch.active)
     R.text('Space 드리프트 → 놓으면 미니 터보!  상대 뒤 모서리를 박으면 스핀!', R.w / 2, R.h - 24, 15, '#ffffff', 'center', '600');
 }
 
-function drawItemSlot(R, s, rt) {
+function drawItemSlot(R, s) {
   const ctx = R.ctx, items = race.items;
-  const size = 64 * s, x = 20, y = 156 * s;
+  const size = 64 * s, x = 20, y = 168 * s;
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.strokeStyle = items.slot ? '#ffc531' : 'rgba(255,255,255,0.35)';
   ctx.lineWidth = 3;
@@ -705,10 +1041,10 @@ function drawItemSlot(R, s, rt) {
   const kinds = Object.keys(ITEM_NAMES);
   const kind = items.rolling ? kinds[Math.floor(now / 70) % kinds.length] : items.slot;
   if (kind) drawIcon(ctx, kind, x + size / 2, y + size / 2, size * 0.7, now / 1000);
-  const label = items.rolling ? '뽑는 중...' : items.slot ? `${ITEM_NAMES[items.slot]}  [Shift/E]` : '? 상자를 먹으세요';
+  const key = touch.active ? '' : '  [Shift/E]';
+  const label = items.rolling ? '뽑는 중...' : items.slot ? `${ITEM_NAMES[items.slot]}${key}` : '? 상자를 먹으세요';
   R.text(label, x + size + 10, y + size / 2 + 6, 15 * s, items.slot ? '#ffffff' : '#cfd3da', 'left', '700');
 
-  // 미사일이 날 쫓아오는 중
   if (items.incomingMissile && Math.floor(now / 150) % 2 === 0)
     R.text('⚠ 미사일 접근!  보호막이 있으면 쓰세요', R.w / 2, R.h * 0.2, 22 * s, '#ff5a4f', 'center', '900');
 }
@@ -732,6 +1068,7 @@ function frame(time) {
 // ───────────────────────── 시작 ─────────────────────────
 
 updateLink();
+renderCars();
 renderLobby();
 placeChat();
 fetchRecords();

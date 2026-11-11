@@ -2,7 +2,10 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#1b1f27">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Drift Dash</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -27,13 +30,30 @@
       <div id="linkHint" class="hint"></div>
     </div>
 
+    <div class="section-title">내 차</div>
+    <div id="cars"></div>
+
+    <div class="section-title">참가자</div>
     <ul id="players"></ul>
+    <div id="botControls" class="row bots hidden">
+      <span>봇 추가</span>
+      <button type="button" class="ghost" data-bot="0">쉬움</button>
+      <button type="button" class="ghost" data-bot="1">보통</button>
+      <button type="button" class="ghost" data-bot="2">어려움</button>
+    </div>
+    <label class="check"><input type="checkbox" id="spec"> 관전만 하기 (레이스에 참가하지 않고 구경)</label>
 
     <div class="row cfg">
       <label>모드
         <select id="mode">
           <option value="speed">스피드전</option>
           <option value="item">아이템전</option>
+        </select>
+      </label>
+      <label>대결
+        <select id="teams">
+          <option value="0">개인전</option>
+          <option value="1">팀전 (레드 vs 블루)</option>
         </select>
       </label>
     </div>
@@ -55,14 +75,16 @@
       <b>↑ / W</b> 가속 · <b>↓ / S</b> 브레이크·후진 · <b>← → / A D</b> 조향<br>
       <b>Space</b> 드리프트 (길게 하다 놓으면 미니 터보) · <b>M</b> 소리<br>
       <b>Shift / E</b> 아이템 사용 (아이템전) · 상대 뒤 모서리를 박으면 스핀<br>
-      <b>G</b> 고스트(트랙 1위의 주행) 켜기/끄기 · 스피드전 랩 기록은 랭킹에 저장<br>
-      레이스 중 <b>Enter</b> 채팅 열기 · <b>Esc</b> 닫기
+      <b>G</b> 고스트 켜기/끄기 · 관전 중 <b>[ ]</b> 또는 <b>← →</b> 로 다른 차 보기<br>
+      레이스 중 <b>Enter</b> 채팅 열기 · <b>Esc</b> 닫기<br>
+      휴대폰: 왼쪽 패드를 좌우로 끌어 조향 (가속은 자동)
     </div>
   </section>
 
   <!-- 결과 -->
   <section id="results" class="panel hidden">
     <h2>레이스 결과</h2>
+    <div id="teamScore" class="team-score hidden"></div>
     <ol id="resultList"></ol>
     <button id="toLobby" class="primary">로비로 돌아가기</button>
     <div id="waitLobby" class="hint center"></div>
@@ -85,18 +107,27 @@
     <button id="chatToggle" type="button" class="ghost">채팅</button>
   </div>
 
-  <!-- 휴대폰용 터치 버튼 -->
+  <!-- 관전: 따라갈 차 바꾸기 -->
+  <div id="specBar" class="hidden">
+    <button id="specPrev" type="button">◀</button>
+    <span id="specName"></span>
+    <button id="specNext" type="button">▶</button>
+  </div>
+
+  <!-- 휴대폰 조작: 왼쪽 조향 패드, 오른쪽 버튼 -->
   <div id="touch" class="hidden">
-    <div class="tleft">
-      <button data-k="left">◀</button>
-      <button data-k="right">▶</button>
+    <div id="steerPad">
+      <div class="pad-hint">◀ 끌어서 조향 ▶</div>
+      <div id="steerKnob"></div>
     </div>
     <div class="tright">
-      <button data-k="item">아이템</button>
+      <button id="itemBtn" data-k="item">아이템</button>
       <button data-k="brake">브레이크</button>
-      <button data-k="drift">드리프트</button>
+      <button data-k="drift" class="big">드리프트</button>
     </div>
   </div>
+
+  <div id="rotateHint">휴대폰을 가로로 돌리면 더 넓게 보여요</div>
 
   <script type="module" src="js/main.js"></script>
 </body>

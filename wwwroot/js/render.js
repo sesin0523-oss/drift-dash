@@ -3,7 +3,10 @@
 import { SHOULDER } from './track.js';
 import { CAR } from './car.js';
 
-export const COLORS = ['#ff5a4f', '#3d8bff', '#ffc531', '#34c77b', '#b46cff', '#ff8ad0'];
+export const COLORS = ['#ff5a4f', '#3d8bff', '#ffc531', '#34c77b', '#b46cff', '#ff8ad0',
+                       '#ff9a3d', '#2fd0d0', '#9be15d', '#f5f5f5', '#8a8fff', '#c4a27a'];
+export const TEAM_COLORS = ['#ff4b4b', '#3d8bff'];
+export const TEAM_NAMES = ['레드', '블루'];
 
 const FONT = '"Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
 
@@ -196,6 +199,18 @@ export class Renderer {
 
     drawExtra?.(ctx);
 
+    // 팀전: 차 밑에 팀 색 원판
+    for (const c of cars) {
+      if (!c.teamColor) continue;
+      ctx.fillStyle = c.teamColor + '55';
+      ctx.strokeStyle = c.teamColor;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y, 27, 27, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
     for (const c of cars) this.drawCar(c, COLORS[c.color % COLORS.length]);
 
     // 보호막
@@ -308,9 +323,27 @@ export class Renderer {
     ctx.beginPath();
     ctx.roundRect(-L / 2, -Wd / 2, L, Wd, 6);
     ctx.fill();
-    // 줄무늬
+    // 차 종류별 모양
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fillRect(-L / 2 + 2, -2.5, L - 4, 5);
+    if (c.type === 2) {                       // 드리프트: 사선 줄무늬
+      for (let k = -2; k <= 2; k++) {
+        ctx.beginPath();
+        ctx.moveTo(k * 7 - 3, -Wd / 2); ctx.lineTo(k * 7 + 1, -Wd / 2);
+        ctx.lineTo(k * 7 + 5, Wd / 2); ctx.lineTo(k * 7 + 1, Wd / 2);
+        ctx.fill();
+      }
+    } else {
+      ctx.fillRect(-L / 2 + 2, -2.5, L - 4, 5);
+    }
+    if (c.type === 1) {                       // 스피드: 뒷날개
+      ctx.fillStyle = '#1b1b1b';
+      ctx.fillRect(-L / 2 - 3, -Wd / 2 - 1, 5, Wd + 2);
+    } else if (c.type === 3) {                // 탱크: 앞 범퍼 가드
+      ctx.fillStyle = '#2a2a2a';
+      ctx.fillRect(L / 2 - 1, -Wd / 2 - 1, 4, Wd + 2);
+      ctx.fillStyle = '#9aa0a8';
+      ctx.fillRect(L / 2, -Wd / 2 + 2, 2, Wd - 4);
+    }
     // 앞유리 / 뒷유리
     ctx.fillStyle = 'rgba(25,35,55,0.85)';
     ctx.beginPath();

@@ -197,7 +197,7 @@ button:active { transform: translateY(1px); }
   border-radius: 12px;
 }
 #chat.floating.open #chatLog { max-height: 220px; text-shadow: none; }
-body.touch #chat.floating { bottom: 124px; }
+body.touch #chat.floating { bottom: 156px; width: min(300px, calc(100vw - 32px)); }
 body.touch #chat.floating #chatToggle {
   display: inline-block;
   pointer-events: auto;
@@ -207,18 +207,150 @@ body.touch #chat.floating #chatToggle {
 }
 #chatToggle.has-unread { background: rgba(255, 197, 49, 0.55); }
 
-/* 터치 버튼 */
-#touch { position: fixed; inset: auto 0 0 0; display: flex; justify-content: space-between; padding: 16px; pointer-events: none; }
-#touch button {
+/* 로비: 섹션 제목, 차 고르기, 봇, 팀 */
+.section-title { margin: 14px 0 6px; font-weight: 700; font-size: 14px; color: var(--muted); }
+#cars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.car-card {
+  padding: 8px 8px 6px;
+  text-align: left;
+  font-weight: 400;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid transparent;
+}
+.car-card.selected { border-color: var(--accent2); background: rgba(255, 197, 49, 0.12); }
+.car-name { font-weight: 800; font-size: 14px; }
+.car-desc { font-size: 11px; color: var(--muted); line-height: 1.3; min-height: 2.6em; margin: 2px 0 4px; }
+.bar-row { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); }
+.bar-row span { width: 42px; flex: none; }
+.bar-row i { flex: 1; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.bar-row b { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+
+.car-tag { font-size: 12px; color: var(--muted); }
+.team-badge { padding: 3px 9px; font-size: 12px; border-radius: 8px; }
+.team-badge:disabled { opacity: 0.85; cursor: default; }
+.remove-bot { padding: 2px 8px; font-size: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; }
+.bots { gap: 6px; flex-wrap: wrap; font-size: 14px; }
+.bots button { padding: 6px 12px; font-size: 13px; }
+label.check { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); margin: 6px 0; }
+label.check input { width: 18px; height: 18px; }
+
+.team-score { text-align: center; font-size: 26px; font-weight: 900; margin: 4px 0 12px; }
+.team-score .red { color: #ff4b4b; }
+.team-score .blue { color: #3d8bff; }
+.team-score .vs { margin: 0 10px; }
+.team-score .who { font-size: 16px; color: var(--accent2); margin-top: 2px; }
+
+/* 관전 바 */
+#specBar {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+#specBar button { width: 44px; height: 40px; padding: 0; background: rgba(255, 255, 255, 0.12); font-size: 16px; }
+#specName { min-width: 120px; text-align: center; font-weight: 700; }
+
+/* 휴대폰 조작 */
+#touch {
+  position: fixed;
+  inset: auto 0 0 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 12px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+#steerPad {
+  position: relative;
+  width: min(46vw, 260px);
+  height: 120px;
+  border-radius: 60px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(255, 255, 255, 0.25);
   pointer-events: auto;
-  width: 84px; height: 84px;
-  margin: 0 6px;
+  touch-action: none;
+}
+#steerPad .pad-hint {
+  position: absolute; inset: auto 0 8px 0;
+  text-align: center; font-size: 12px; color: rgba(255, 255, 255, 0.6);
+  pointer-events: none;
+}
+#steerKnob {
+  position: absolute;
+  left: calc(50% - 28px);
+  top: 32px;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+#touch .tright { display: flex; align-items: flex-end; gap: 8px; }
+#touch .tright button {
+  pointer-events: auto;
+  width: 72px; height: 72px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.18);
   border: 2px solid rgba(255, 255, 255, 0.35);
-  font-size: 20px;
+  font-size: 13px;
   user-select: none;
+  -webkit-user-select: none;
   touch-action: none;
 }
-#touch .tright button { font-size: 14px; }
+#touch .tright button.big { width: 92px; height: 92px; font-size: 15px; }
 #touch button.on { background: rgba(255, 197, 49, 0.55); }
+body.touch.racing #specBar { bottom: 20px; }
+
+/* 세로 화면 안내 (휴대폰 + 레이스 중 + 세로일 때만) */
+#rotateHint { display: none; }
+@media (orientation: portrait) {
+  body.touch.racing #rotateHint {
+    display: block;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 8px 14px;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.55);
+    font-size: 13px;
+    pointer-events: none;
+    animation: fadeHint 4s forwards;
+  }
+}
+@keyframes fadeHint { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 좁은 화면 (휴대폰) */
+@media (max-width: 520px) {
+  .panel { padding: 18px 16px 14px; width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
+  h1 { font-size: 32px; }
+  #cars { grid-template-columns: repeat(2, 1fr); }
+  .cfg { flex-wrap: wrap; }
+  .cfg label { min-width: 45%; }
+  button.primary { padding: 12px; font-size: 16px; }
+  /* 세로 휴대폰: 조향 패드와 버튼이 한 줄에 들어가게 */
+  #steerPad { width: 44vw; height: 100px; }
+  #steerKnob { top: 22px; }
+  #steerPad .pad-hint { font-size: 10px; bottom: 4px; }
+  #touch .tright { gap: 6px; }
+  #touch .tright button { width: 58px; height: 58px; font-size: 12px; }
+  #touch .tright button.big { width: 74px; height: 74px; font-size: 13px; }
+}
+#touch .tright button { white-space: nowrap; }
+/* 가로로 눕힌 휴대폰 (높이가 낮음) */
+@media (max-height: 460px) {
+  .panel { top: 8px; transform: translateX(-50%); max-height: calc(100vh - 16px); }
+  #steerPad { height: 96px; }
+  #steerKnob { top: 20px; }
+  #touch .tright button { width: 60px; height: 60px; }
+  #touch .tright button.big { width: 78px; height: 78px; }
+  body.touch #chat.floating { bottom: 118px; }
+}

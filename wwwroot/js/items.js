@@ -88,8 +88,9 @@ export class Items {
       const age = now - o.born;
       if (o.kind === 'banana') {
         if (age > BANANA_LIFE) { this.objs.delete(o.id); continue; }
-        // 내가 밟았나? (내가 놓은 바나나는 0.8초 뒤부터 나도 밟힘)
-        if (car && !car.finished && (o.owner !== this.me || age > 800) && Math.hypot(car.x - o.x, car.y - o.y) < 22) {
+        // 내가 밟았나? (내가 놓은 바나나는 0.8초 뒤부터 나도 밟힘, 같은 팀 바나나는 안 밟힘)
+        if (car && !car.finished && (o.owner !== this.me || age > 800) && !hooks.sameTeam?.(o.owner)
+            && Math.hypot(car.x - o.x, car.y - o.y) < 22) {
           this.objs.delete(o.id);
           hooks.send({ t: 'objHit', oid: o.id });
           hooks.hitMe(o.owner, 'banana');

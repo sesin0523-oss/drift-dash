@@ -157,16 +157,16 @@
     <button id="specNext" type="button">▶</button>
   </div>
 
-  <!-- 휴대폰 조작: 왼쪽 조향 패드, 오른쪽 버튼 -->
+  <!-- 휴대폰 조작: 왼쪽 ◀ ▶ 버튼(누른 채 옆으로 밀어도 됨), 오른쪽 드리프트·아이템·브레이크. 가속은 자동 -->
   <div id="touch" class="hidden">
-    <div id="steerPad">
-      <div class="pad-hint">◀ 끌어서 조향 ▶</div>
-      <div id="steerKnob"></div>
+    <div id="steerBtns">
+      <div class="sbtn" data-side="-1"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg></div>
+      <div class="sbtn" data-side="1"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></div>
     </div>
     <div class="tright">
-      <button id="itemBtn" data-k="item">아이템</button>
-      <button data-k="brake">브레이크</button>
-      <button data-k="drift" class="big">드리프트</button>
+      <button id="itemBtn" data-k="item" class="tb item">아이템</button>
+      <button data-k="brake" class="tb brake">브레이크</button>
+      <button data-k="drift" class="tb drift"><b>DRIFT</b><span>드리프트</span></button>
     </div>
   </div>
 

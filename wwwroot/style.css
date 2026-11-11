@@ -367,45 +367,43 @@ label.check input { width: 18px; height: 18px; }
   padding: 12px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   pointer-events: none;
 }
-#steerPad {
-  position: relative;
-  width: min(46vw, 260px);
-  height: 120px;
-  border-radius: 60px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 2px solid rgba(255, 255, 255, 0.25);
+#steerBtns {
+  display: flex;
+  gap: 14px;
   pointer-events: auto;
   touch-action: none;
 }
-#steerPad .pad-hint {
-  position: absolute; inset: auto 0 8px 0;
-  text-align: center; font-size: 12px; color: rgba(255, 255, 255, 0.6);
-  pointer-events: none;
+#steerBtns .sbtn {
+  width: 104px; height: 112px;
+  border-radius: 34px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 2px solid rgba(255, 255, 255, 0.32);
+  box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.18);
+  display: grid; place-items: center;
+  user-select: none; -webkit-user-select: none;
+  transition: background 0.06s, transform 0.06s;
 }
-#steerKnob {
+#steerBtns .sbtn svg { width: 46px; height: 46px; fill: none; stroke: rgba(255, 255, 255, 0.9); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+#steerBtns .sbtn.on { background: rgba(255, 255, 255, 0.38); transform: scale(0.96); }
+
+/* 오른쪽: 큰 드리프트 버튼(오른쪽 아래), 그 위에 아이템, 왼쪽에 작은 브레이크 */
+#touch .tright { position: relative; width: 236px; height: 214px; }
+#touch .tb {
   position: absolute;
-  left: calc(50% - 28px);
-  top: 32px;
-  width: 56px; height: 56px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.55);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
-  pointer-events: none;
-}
-#touch .tright { display: flex; align-items: flex-end; gap: 8px; }
-#touch .tright button {
   pointer-events: auto;
-  width: 72px; height: 72px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.16);
   border: 2px solid rgba(255, 255, 255, 0.35);
-  font-size: 13px;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
+  box-shadow: inset 0 -5px 0 rgba(0, 0, 0, 0.18);
+  color: #fff; font-size: 13px; font-weight: 800; padding: 0;
+  user-select: none; -webkit-user-select: none; touch-action: none; white-space: nowrap;
 }
-#touch .tright button.big { width: 92px; height: 92px; font-size: 15px; }
-#touch button.on { background: rgba(255, 197, 49, 0.55); }
+#touch .tb.drift { right: 0; bottom: 0; width: 118px; height: 118px; display: grid; place-content: center; gap: 2px; }
+#touch .tb.drift b { font-size: 22px; font-style: italic; letter-spacing: 1px; }
+#touch .tb.drift span { font-size: 11px; opacity: 0.75; }
+#touch .tb.item { right: 22px; bottom: 132px; width: 76px; height: 76px; background: rgba(255, 197, 49, 0.25); border-color: rgba(255, 220, 120, 0.6); }
+#touch .tb.brake { right: 132px; bottom: 4px; width: 84px; height: 54px; border-radius: 16px; font-size: 12px; }
+#touch .tb.on { background: rgba(255, 197, 49, 0.55); transform: scale(0.96); }
 body.touch.racing #specBar { bottom: 20px; }
 
 /* 세로 화면 안내 (휴대폰 + 레이스 중 + 세로일 때만) */
@@ -435,21 +433,16 @@ body.touch.racing #specBar { bottom: 20px; }
   .cfg { flex-wrap: wrap; }
   .cfg label { min-width: 45%; }
   button.primary { padding: 12px; font-size: 16px; }
-  /* 세로 휴대폰: 조향 패드와 버튼이 한 줄에 들어가게 */
-  #steerPad { width: 44vw; height: 100px; }
-  #steerKnob { top: 22px; }
-  #steerPad .pad-hint { font-size: 10px; bottom: 4px; }
-  #touch .tright { gap: 6px; }
-  #touch .tright button { width: 58px; height: 58px; font-size: 12px; }
-  #touch .tright button.big { width: 74px; height: 74px; font-size: 13px; }
+  /* 세로 휴대폰: 버튼을 조금 작게 */
+  #steerBtns { gap: 8px; }
+  #steerBtns .sbtn { width: 70px; height: 84px; border-radius: 24px; }
+  #steerBtns .sbtn svg { width: 34px; height: 34px; }
+  #touch .tright { zoom: 0.78; }
 }
-#touch .tright button { white-space: nowrap; }
 /* 가로로 눕힌 휴대폰 (높이가 낮음) */
 @media (max-height: 460px) {
   .panel { top: 8px; transform: translateX(-50%); max-height: calc(100vh - 16px); }
-  #steerPad { height: 96px; }
-  #steerKnob { top: 20px; }
-  #touch .tright button { width: 60px; height: 60px; }
-  #touch .tright button.big { width: 78px; height: 78px; }
+  #steerBtns .sbtn { width: 92px; height: 96px; }
+  #touch .tright { zoom: 0.86; }
   body.touch #chat.floating { bottom: 118px; }
 }

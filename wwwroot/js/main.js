@@ -137,33 +137,35 @@ addEventListener('touchstart', () => {
   }
 }, { passive: true });
 
-// 왼쪽 조향 패드: 손가락을 처음 댄 곳에서 좌우로 끈 만큼 핸들 (아날로그)
+// 왼쪽 ◀ ▶ 버튼: 누르는 동안 그쪽으로 핸들. 손가락을 떼지 않고 옆 버튼으로 밀어도 바뀐다.
+// 손가락마다(pointerId) 어느 쪽 위에 있는지 기억해서, 마지막에 누른 쪽으로 꺾는다.
 {
-  const pad = $('steerPad'), knob = $('steerKnob');
-  let pid = null, x0 = 0, RANGE = 70;
-  const move = (x) => {
-    touch.steer = Math.max(-1, Math.min(1, (x - x0) / RANGE));
-    knob.style.transform = `translateX(${touch.steer * RANGE}px)`;
+  const box = $('steerBtns'), btns = [...box.querySelectorAll('.sbtn')];
+  const fingers = new Map();   // pointerId → -1 | 1
+  const sideAt = (x) => {
+    const r = box.getBoundingClientRect();
+    return x < r.left + r.width / 2 ? -1 : 1;
   };
-  pad.addEventListener('pointerdown', (e) => {
+  const refresh = () => {
+    const sides = [...fingers.values()];
+    touch.steer = sides.length ? sides[sides.length - 1] : 0;
+    for (const b of btns) b.classList.toggle('on', sides.includes(+b.dataset.side));
+  };
+  box.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    pid = e.pointerId;
-    try { pad.setPointerCapture(pid); } catch { /* 일부 브라우저는 실패할 수 있음 */ }
-    const r = pad.getBoundingClientRect();
-    RANGE = Math.max(36, Math.min(70, (r.width - 56) / 2));   // 패드 폭에 맞춘 조향 범위
-    x0 = Math.max(r.left + RANGE, Math.min(r.right - RANGE, e.clientX));
-    knob.style.left = `${x0 - r.left - 28}px`;
-    move(e.clientX);
+    try { box.setPointerCapture(e.pointerId); } catch { /* 일부 브라우저는 실패할 수 있음 */ }
+    fingers.delete(e.pointerId);
+    fingers.set(e.pointerId, sideAt(e.clientX));
+    refresh();
   });
-  pad.addEventListener('pointermove', (e) => { if (e.pointerId === pid) move(e.clientX); });
-  const end = (e) => {
-    if (e.pointerId !== pid) return;
-    pid = null;
-    touch.steer = 0;
-    knob.style.transform = 'translateX(0)';
-  };
-  pad.addEventListener('pointerup', end);
-  pad.addEventListener('pointercancel', end);
+  box.addEventListener('pointermove', (e) => {
+    if (!fingers.has(e.pointerId)) return;
+    const side = sideAt(e.clientX);
+    if (fingers.get(e.pointerId) !== side) { fingers.delete(e.pointerId); fingers.set(e.pointerId, side); refresh(); }
+  });
+  const end = (e) => { if (fingers.delete(e.pointerId)) refresh(); };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
 }
 // 오른쪽 버튼: 브레이크·드리프트는 누르는 동안, 아이템은 누를 때 한 번
 for (const btn of document.querySelectorAll('#touch [data-k]')) {
@@ -1380,7 +1382,8 @@ function finishSector(i, v) {
 /** 화면 위쪽 가운데: S1 S2 S3 칸 (보라 = 내 최고 경신, 노랑 = 더 느림) + 방금 끝난 섹터 시간 */
 function drawSectors(R, s, car, rt, suffix = '') {
   const S = race.sec, ctx = R.ctx;
-  const w = 74 * s, h = 22 * s, gap = 6, x0 = R.w / 2 - (w * 3 + gap * 2) / 2, y = (race.teams ? 96 : 10) * s;   // 팀전이면 팀 점수 아래
+  const w = 74 * s, h = 22 * s, gap = 6, x0 = R.w / 2 - (w * 3 + gap * 2) / 2,
+    y = R.w < 520 ? 196 : (race.teams ? 96 : 10) * s;   // 세로 휴대폰은 왼쪽 위 글자 아래, 팀전이면 팀 점수 아래
   const now = performance.now();
   for (let i = 0; i < 3; i++) {
     const x = x0 + i * (w + gap), v = S.cur[i];
@@ -1430,7 +1433,9 @@ function drawHud(st, cars) {
 
     if (!car.finished) {
       const kmh = Math.round(car.speed * 0.36);
-      const bx = R.w - 20, by = R.h - bottomPad;
+      // 휴대폰: 오른쪽 아래는 버튼 자리라서 속도계를 아래 가운데로
+      const bx = touch.active ? R.w / 2 + 70 * s : R.w - 20;
+      const by = !touch.active ? R.h - bottomPad : R.w < 520 ? R.h - 150 : R.h - 16;   // 세로 휴대폰은 버튼 위
       R.text(`${kmh}`, bx - 56, by, 42 * s, '#ffffff', 'right');
       R.text('km/h', bx, by, 16 * s, '#cfd3da', 'right');
       const charge = Math.min(1, car.driftCharge / 1.5);

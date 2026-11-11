@@ -101,6 +101,11 @@ export class Renderer {
       this.puff(rx + (Math.random() - 0.5) * 14, ry + (Math.random() - 0.5) * 14, 'rgba(235,235,235,', 10 + Math.random() * 8);
     if ((car.boost > 0 || car.boosting) && Math.random() < 0.9)
       this.puff(rx, ry, Math.random() < 0.5 ? 'rgba(255,170,40,' : 'rgba(255,90,40,', 6 + Math.random() * 5, -fx * 200, -fy * 200, 0.25);
+    if (car.drafting && Math.random() < 0.6) {   // 슬립스트림: 차 옆으로 지나가는 바람 줄기
+      const side = Math.random() < 0.5 ? -1 : 1;
+      this.puff(car.x + fx * 10 - fy * 14 * side, car.y + fy * 10 + fx * 14 * side, 'rgba(210,235,255,', 2.5,
+        -fx * 420, -fy * 420, 0.22);
+    }
     if (car.offroad && car.speed > 120 && Math.random() < 0.5)
       this.puff(rx, ry, 'rgba(150,110,60,', 8 + Math.random() * 6, 0, 0, 0.5);
     if (car.driftCharge > 0.7 && Math.random() < 0.6) {
@@ -240,7 +245,7 @@ export class Renderer {
     for (const c of cars) {
       const name = nameOf(c);
       if (!name) continue;
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillStyle = c.teamColor ? c.teamColor + 'cc' : 'rgba(0,0,0,0.45)';   // 팀전이면 팀 색 이름표
       const w = ctx.measureText(name).width + 12;
       ctx.beginPath();
       ctx.roundRect(c.x - w / 2, c.y - 44, w, 20, 10);
@@ -393,8 +398,8 @@ export class Renderer {
     ctx.stroke(track.path);
     for (const c of cars) {
       ctx.fillStyle = COLORS[c.color % COLORS.length];
-      ctx.strokeStyle = c.id === meId ? '#fff' : 'rgba(0,0,0,0.6)';
-      ctx.lineWidth = 2 / s;
+      ctx.strokeStyle = c.id === meId ? '#fff' : c.teamColor ?? 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = (c.teamColor ? 3.5 : 2) / s;
       ctx.beginPath();
       ctx.arc(c.x, c.y, (c.id === meId ? 9 : 7) / s, 0, Math.PI * 2);
       ctx.fill();

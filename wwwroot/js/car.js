@@ -155,12 +155,15 @@ export class Car {
 
     // 최고 속도 (부스트 중엔 더 빠르고, 잔디에선 느림)
     if (this.boost > 0) this.boost -= dt;
-    const max = this.boost > 0 ? S.boostMax : this.offroad ? S.offroadMax : S.maxSpeed;
+    // 팀 슬립스트림: 팀원 바로 뒤에 붙으면 바람을 덜 받아 최고 속도 +8%, 가속 +25%
+    this.drafting = !!input.draft && !this.offroad && this.boost <= 0;
+    const draftMul = this.drafting ? 1.08 : 1;
+    const max = this.boost > 0 ? S.boostMax : this.offroad ? S.offroadMax : S.maxSpeed * draftMul;
 
     // 가속 / 브레이크 / 후진 — 최고 속도에 닿으면 더 가속하지 않음
     if (input.throttle) {
       if (vf < 0) vf += S.brake * dt;
-      else if (vf < max) vf = Math.min(max, vf + S.accel * dt);
+      else if (vf < max) vf = Math.min(max, vf + S.accel * (this.drafting ? 1.25 : 1) * dt);
     }
     if (input.brake) vf -= (vf > 0 ? S.brake : S.reverse) * dt;
     if (!input.throttle && !input.brake && !spinning) vf -= Math.sign(vf) * Math.min(Math.abs(vf), S.roll * dt);
@@ -174,11 +177,27 @@ export class Car {
     const speedFactor = Math.min(1, Math.abs(vf) / 160) * (1 - 0.3 * Math.min(1, Math.abs(vf) / S.boostMax));
     let turn = input.steer * S.steer * speedFactor * Math.sign(vf || 1);
     if (input.handbrake) turn *= 1.3;
-    this.a += turn * dt;
+    const dA = turn * dt;
+    this.a += dA;
 
-    // 옆미끄럼 줄이기 (접지력)
-    // 스핀 중엔 거의 미끄러지기만 해서 속도가 어느 정도 남는다
-    const grip = spinning ? 0.6 : input.handbrake ? S.driftGrip : this.offroad ? S.offroadGrip : S.grip;
+    // 트랙 접지력 (눈길이면 0.7배 → 더 미끄러짐)
+    const gm = track.def.gripMul ?? 1;
+
+    // 1) 속도를 바깥 좌표로 (차가 돌기 전 방향 기준)
+    let wx = fx * vf + rx * vr, wy = fy * vf + ry * vr;
+    // 2) 차 머리가 돈 만큼 속도 방향도 '일부만' 따라 돈다 (나머지는 옆미끄럼이 됨)
+    //    평소엔 93% 따라가서 거의 미끄러지지 않고, Space(드리프트)면 55%만 따라가서 옆으로 흐른다
+    const follow = spinning ? 0 : input.handbrake ? 0.55 : (this.offroad ? 0.75 : 0.93) * (0.6 + 0.4 * gm);
+    const rot = dA * follow, cr = Math.cos(rot), sr = Math.sin(rot);
+    [wx, wy] = [wx * cr - wy * sr, wx * sr + wy * cr];
+    // 3) 새 방향 기준으로 다시 나눠서, 옆 성분을 접지력만큼 줄임
+    //    스핀 중엔 거의 미끄러지기만 해서 속도가 어느 정도 남는다
+    const nfx = Math.cos(this.a), nfy = Math.sin(this.a);
+    vf = wx * nfx + wy * nfy;
+    vr = -wx * nfy + wy * nfx;
+    const grip = spinning ? 0.6
+      : input.handbrake ? S.driftGrip * (0.5 + 0.5 * gm)
+      : (this.offroad ? S.offroadGrip : S.grip) * gm;
     vr *= Math.exp(-grip * dt);
     if (input.handbrake) vf *= 1 - 0.35 * dt;
 
@@ -193,8 +212,7 @@ export class Car {
       this.driftCharge = 0;
     }
 
-    // 새 방향 기준으로 속도 다시 합치기 (차가 '돌면서 나아가는' 느낌)
-    const nfx = Math.cos(this.a), nfy = Math.sin(this.a);
+    // 새 방향 기준으로 속도 다시 합치기
     this.vx = nfx * vf + -nfy * vr;
     this.vy = nfy * vf + nfx * vr;
 

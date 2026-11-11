@@ -63,14 +63,22 @@ const keys = new Set();
 const touch = { active: false, steer: 0, brake: false, drift: false };
 
 const chat = new Chat({
-  send: (text) => net.send({ t: 'chat', text }),
+  send: (text, team) => net.send({ t: 'chat', text, team }),
   colorOf: (c) => COLORS[(c ?? 0) % COLORS.length],
+  teamColorOf: (t) => TEAM_COLORS[t],
   onOpenChange: () => keys.clear(),
   onIncoming: (m) => { if (m.id !== me) sound.beep(1320, 0.06, 'sine', 0.12); },
 });
 
 function placeChat() {
   chat.placeIn(mode === 'lobby' ? $('lobby') : mode === 'results' ? $('results') : null);
+  updateTeamChat();
+}
+
+/** 팀전이고 내가 팀에 속해 있으면 채팅에 "전체/팀" 버튼 */
+function updateTeamChat() {
+  const p = playerOf(me);
+  chat.setTeamAvailable(roster.teams && p && !p.spec && p.team >= 0 ? TEAM_COLORS[p.team] : null);
 }
 
 const GAME_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD',
@@ -210,6 +218,21 @@ net.on('roster', (m) => {
   roster = m;
   if (m.phase === 'lobby' && mode !== 'lobby') enterLobby();
   renderLobby();
+  updateTeamChat();
+});
+
+// 팀 부스터 게이지
+net.on('tgauge', (m) => { if (race) race.teamGauge = m.g; });
+net.on('tboost', (m) => {
+  if (!race) return;
+  race.feed.push({ text: `${TEAM_NAMES[m.team]} 팀 부스터 발동!`, until: performance.now() + 3000, mine: teamOf(me) === m.team });
+  const car = race.car;
+  if (car && !car.finished && teamOf(me) === m.team) {
+    car.boost = Math.max(car.boost, 2.2);
+    showBanner('팀 부스터!', 1500, TEAM_COLORS[m.team]);
+    renderer.shake = Math.max(renderer.shake, 8);
+  }
+  for (const b of race.bots) if (!b.car.finished && teamOf(b.id) === m.team) b.car.boost = Math.max(b.car.boost, 2.2);
 });
 
 net.on('race', (m) => startRace(m));
@@ -269,6 +292,12 @@ net.on('spun', (m) => {
   race.feed.push({ text, until: performance.now() + 3500, mine: m.from === me && m.id !== me });
   if (race.feed.length > 4) race.feed.shift();
   if (m.from === me && m.id !== me) showBanner('명중! 상대가 돌았어요', 1400, '#ffc531');
+  // 팀전: 상대를 스핀시키면 팀 게이지 +15
+  if (race.teams && m.id !== m.from && !sameTeam(m.id, m.from)) {
+    if (m.from === me) race.tgAcc += 15;
+    const bot = race.bots.find((b) => b.id === m.from);
+    if (bot) bot.tgAcc += 15;
+  }
 });
 
 // 아이템전: 다른 사람(또는 다른 사람의 봇)이 보낸 아이템 이벤트 → 이 브라우저의 모든 아이템 판정기에
@@ -535,6 +564,7 @@ function startRace(m) {
     items: null,
     ghost: null, ghostRec: [],
     specId: null,
+    teamGauge: [0, 0], tgAcc: 0,      // 팀 부스터 게이지 / 내가 모은 몫(아직 안 보낸 것)
   };
   if (race.car) {
     race.car.id = me;
@@ -548,6 +578,7 @@ function startRace(m) {
       if (!p?.bot) return;
       const bot = new Bot(p, track, s);
       bot.car.team = race.teams ? p.team : -1;
+      bot.tgAcc = 0;
       race.bots.push(bot);
     });
   }
@@ -642,6 +673,34 @@ function aheadTarget(selfId, st) {
   return null;
 }
 
+/** 팀 슬립스트림: 같은 팀 차 바로 뒤(40~170px, 차선 폭 안, 같은 방향)에 붙어 빠르게 달리는 중인지 */
+function isDrafting(c, selfId, cars) {
+  if (!race.teams || c.speed < 250) return false;
+  const fx = Math.cos(c.a), fy = Math.sin(c.a);
+  for (const [id, o] of cars) {
+    if (id === selfId || o.finished || !sameTeam(id, selfId)) continue;
+    const dx = o.x - c.x, dy = o.y - c.y;
+    const along = dx * fx + dy * fy, side = dx * -fy + dy * fx;
+    if (along > 40 && along < 170 && Math.abs(side) < 24 && Math.cos(o.a - c.a) > 0.85) return true;
+  }
+  return false;
+}
+
+/** 팀 게이지 몫을 0.5초마다 서버로 (as: 봇이면 봇 id) */
+function flushTeamGauge(holder, asId) {
+  if (!race.teams || holder.tgAcc < 1) return;
+  const n = Math.min(20, Math.floor(holder.tgAcc));
+  holder.tgAcc -= n;
+  net.send(asId ? { t: 'tg', n, as: asId } : { t: 'tg', n });
+}
+
+/** 팀 게이지 쌓기: 드리프트 초당 6, 슬립스트림 초당 4 */
+function gainTeamGauge(holder, c) {
+  if (!race.teams || c.finished) return;
+  if (c.drifting && c.spin <= 0) holder.tgAcc += 6 * DT;
+  if (c.drafting) holder.tgAcc += 4 * DT;
+}
+
 function placeOf(selfId, st) {
   const i = st.findIndex((s) => s.id === selfId);
   return st.length > 1 && i >= 0 ? i / (st.length - 1) : 0;   // 0 = 1등, 1 = 꼴찌
@@ -675,8 +734,11 @@ function stepRace() {
 
   const canDrive = t >= 0 && !car.finished;
   const input = canDrive ? readInput() : { throttle: false, brake: car.finished && car.speed > 30, steer: 0, handbrake: false };
+  input.draft = canDrive && isDrafting(car, me, cars);
   const prev = { x: car.x, y: car.y, a: car.a };
   car.step(input, DT, race.track, car.finished ? [] : collidables(me, cars), Math.max(0, t));
+  gainTeamGauge(race, car);
+  if (race.sendTick % 30 === 0) flushTeamGauge(race, null);
 
   // 내가 상대 뒤 모서리를 박았으면 → 서버를 거쳐 상대(또는 봇의 주인)에게
   for (const h of car.hits) {
@@ -745,7 +807,10 @@ function stepBots(t, now, cars, st) {
     const input = t >= 0 && !c.finished
       ? bot.think(DT, others)
       : { throttle: false, brake: c.finished && c.speed > 30, steer: 0, handbrake: false };
+    input.draft = t >= 0 && !c.finished && isDrafting(c, bot.id, cars);
     c.step(input, DT, race.track, others, Math.max(0, t));
+    gainTeamGauge(bot, c);
+    if (bot.sendTick % 30 === 0) flushTeamGauge(bot, bot.id);
 
     for (const h of c.hits) {
       const last = bot.hitCooldown.get(h.id) ?? -1e9;
@@ -989,14 +1054,16 @@ function drawHud(st, cars) {
     R.text(`${i + 1}. ${p?.name ?? '?'}  ${fmtTime(f.time)}`, R.w - 20, y + i * 22, 15 * s, '#ffffff', 'right', '600');
   });
 
-  // 팀전: 현재 점수
+  // 팀전: 현재 점수 + 팀 부스터 게이지 + 화면 밖 팀원 화살표
   let feedY = 34;
   if (race.teams) {
     const [r, b] = teamScores(st.map((x) => x.id));
     R.text(`레드 ${r}`, R.w / 2 - 14, 34, 22 * s, TEAM_COLORS[0], 'right', '900');
     R.text(':', R.w / 2, 34, 22 * s, '#ffffff', 'center', '900');
     R.text(`${b} 블루`, R.w / 2 + 14, 34, 22 * s, TEAM_COLORS[1], 'left', '900');
-    feedY = 64;
+    drawTeamGauges(R, s);
+    drawTeammateArrows(R, cars, s);
+    feedY = 84;
   }
 
   if (rt < 0) {
@@ -1024,6 +1091,56 @@ function drawHud(st, cars) {
 
   if (car && !car.finished && rt > 0 && rt < 6000 && !touch.active)
     R.text('Space 드리프트 → 놓으면 미니 터보!  상대 뒤 모서리를 박으면 스핀!', R.w / 2, R.h - 24, 15, '#ffffff', 'center', '600');
+}
+
+/** 팀 부스터 게이지 두 개 (레드 왼쪽, 블루 오른쪽). 꽉 차면 팀 전원 부스트 */
+function drawTeamGauges(R, s) {
+  const ctx = R.ctx, w = 110 * s, h = 8, y = 46;
+  const myTeam = teamOf(me);
+  race.teamGauge.forEach((g, team) => {
+    const x = team === 0 ? R.w / 2 - 14 - w : R.w / 2 + 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 4); ctx.fill();
+    const fw = w * Math.min(1, g / 100);
+    ctx.fillStyle = TEAM_COLORS[team];
+    ctx.beginPath();
+    if (team === 0) ctx.roundRect(x + w - fw, y, fw, h, 4); else ctx.roundRect(x, y, fw, h, 4);
+    ctx.fill();
+    if (team === myTeam) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, 4); ctx.stroke();
+    }
+  });
+  R.text('팀 부스터', R.w / 2, y + h + 1, 10 * s, '#e6e9ef', 'center', '700');
+  if (race.car?.drafting) R.text('슬립스트림!', R.w / 2, y + h + 34, 15 * s, '#bfe3ff', 'center', '800');
+}
+
+/** 화면 밖에 있는 팀원 → 화면 가장자리에 팀 색 화살표 + 이름 */
+function drawTeammateArrows(R, cars, s) {
+  const myTeam = teamOf(me);
+  if (myTeam < 0) return;
+  const ctx = R.ctx, cam = R.cam, m = 34;
+  for (const c of cars) {
+    if (c.id === me || teamOf(c.id) !== myTeam || c.finished) continue;
+    const sx = (c.x - cam.x) * cam.zoom + R.w / 2, sy = (c.y - cam.y) * cam.zoom + R.h / 2;
+    if (sx > 0 && sx < R.w && sy > 0 && sy < R.h) continue;   // 화면 안이면 생략
+    const ang = Math.atan2(sy - R.h / 2, sx - R.w / 2);
+    // 화면 가운데에서 그 방향으로 가다가 가장자리(여백 m)에 닿는 점
+    const k = Math.min(Math.abs((R.w / 2 - m) / Math.cos(ang) || 1e9), Math.abs((R.h / 2 - m) / Math.sin(ang) || 1e9));
+    const ax = R.w / 2 + Math.cos(ang) * k, ay = R.h / 2 + Math.sin(ang) * k;
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.rotate(ang);
+    ctx.fillStyle = TEAM_COLORS[myTeam];
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-8, -10); ctx.lineTo(-4, 0); ctx.lineTo(-8, 10); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+    const dist = Math.round(Math.hypot(c.x - (race.car?.x ?? cam.x), c.y - (race.car?.y ?? cam.y)) / 10);
+    R.text(`${playerOf(c.id)?.name ?? ''} ${dist}m`, ax - Math.cos(ang) * 22, ay - Math.sin(ang) * 22 + 4, 12 * s, '#ffffff', 'center', '700');
+  }
 }
 
 function drawItemSlot(R, s) {

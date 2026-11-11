@@ -25,9 +25,10 @@ public sealed class Room
 {
     public const int MaxRacers = 6;            // 사람 + 봇
     public const int MaxConnections = 10;      // 관전자 포함
-    public const int TrackCount = 4;
+    public const int TrackCount = 6;
     private static readonly int[] PlacePoints = { 10, 8, 6, 5, 4, 3 };
-    private static readonly string[] TrackNames = { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링" };
+    private static readonly string[] TrackNames = { "선셋 서킷", "협곡 헤어핀", "네온 시티", "도넛 링", "스노우 밸리", "해안 고속도로" };
+    private const int TeamGaugeMax = 100;
     private static readonly string[] BotNames = { "봇 번개", "봇 터보", "봇 회오리", "봇 질주", "봇 스키드", "봇 니트로" };
     private static readonly string[] LevelNames = { "쉬움", "보통", "어려움" };
 
@@ -44,6 +45,7 @@ public sealed class Room
     private int _laps = 3;
     private string _mode = "speed";   // speed: 스피드전, item: 아이템전
     private bool _teams;              // 팀전 (레드 vs 블루)
+    private readonly int[] _teamGauge = new int[2];   // 팀 부스터 게이지 (0~100)
     private long _startAt;
     private int _raceId;
     private int _nextBotId = -1;
@@ -211,6 +213,7 @@ public sealed class Room
                     _raceId++;
                     _results.Clear();
                     _startAt = Lobby.Now + 4000;   // 4초 뒤 출발 (카운트다운)
+                    _teamGauge[0] = _teamGauge[1] = 0;
                     if (_teams) BalanceTeamsLocked();
                     foreach (var cl in _clients) cl.InRace = !cl.Spectate;
                     foreach (var b in _bots) b.InRace = true;
@@ -278,6 +281,21 @@ public sealed class Room
                     break;
                 }
 
+                case "tg" when racing && _teams:
+                {
+                    // 팀 부스터 게이지: 드리프트·슬립스트림·상대 스핀으로 모은 점수를 팀 공용 게이지에
+                    int team = TeamOf(actor);
+                    if (team < 0) break;
+                    _teamGauge[team] += Math.Clamp((int?)m["n"] ?? 0, 0, 20);
+                    if (_teamGauge[team] >= TeamGaugeMax)
+                    {
+                        _teamGauge[team] = 0;
+                        Broadcast(new { t = "tboost", team });   // 꽉 참 → 팀 전원 부스트
+                    }
+                    Broadcast(new { t = "tgauge", g = _teamGauge });
+                    break;
+                }
+
                 case "lap" when racing && !isBot && _mode == "speed":
                 {
                     // 한 바퀴 기록 (사람·스피드전만)
@@ -303,6 +321,14 @@ public sealed class Room
                         break;
                     }
                     c.ChatTimes.Enqueue(now);
+
+                    // 팀 채팅: 같은 팀에게만 (기록에도 남기지 않음)
+                    if ((bool?)m["team"] == true && _teams && c.Team >= 0 && !c.Spectate)
+                    {
+                        string tj = JsonSerializer.Serialize(new { t = "chat", id = c.Id, name = c.Name, color = c.Color, text, ts = now, teamChat = c.Team });
+                        foreach (var x in _clients) if (x.Team == c.Team && !x.Spectate) x.Send(tj);
+                        break;
+                    }
                     AddChatLocked(JsonSerializer.Serialize(new { t = "chat", id = c.Id, name = c.Name, color = c.Color, text, ts = now }));
                     break;
                 }
@@ -311,6 +337,9 @@ public sealed class Room
     }
 
     // ───────────────────────── 팀 ─────────────────────────
+
+    private int TeamOf(int id) =>
+        _clients.FirstOrDefault(c => c.Id == id)?.Team ?? _bots.FirstOrDefault(b => b.Id == id)?.Team ?? -1;
 
     private int SmallerTeam()
     {

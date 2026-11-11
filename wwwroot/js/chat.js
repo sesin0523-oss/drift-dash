@@ -6,7 +6,7 @@
 const FADE_MS = 12000;   // 레이스 중 메시지가 화면에 남는 시간
 
 export class Chat {
-  constructor({ send, colorOf, onOpenChange, onIncoming }) {
+  constructor({ send, colorOf, teamColorOf, onOpenChange, onIncoming }) {
     this.root = document.getElementById('chat');
     this.log = document.getElementById('chatLog');
     this.form = document.getElementById('chatForm');
@@ -14,6 +14,11 @@ export class Chat {
     this.toggleBtn = document.getElementById('chatToggle');
     this.send = send;
     this.colorOf = colorOf;
+    this.teamColorOf = teamColorOf;
+    this.teamBtn = document.getElementById('chatTeam');
+    this.teamMode = false;        // true 면 팀원에게만
+    this.teamColor = null;
+    this.teamBtn.addEventListener('click', () => this.setTeamMode(!this.teamMode));
     this.onOpenChange = onOpenChange;
     this.onIncoming = onIncoming;
     this.floating = false;
@@ -23,12 +28,13 @@ export class Chat {
     this.form.addEventListener('submit', (e) => {
       e.preventDefault();
       const text = this.input.value.trim();
-      if (text) this.send(text);
+      if (text) this.send(text, this.teamMode);
       this.input.value = '';
       if (this.floating) this.close();
     });
     this.input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { this.input.value = ''; if (this.floating) this.close(); else this.input.blur(); }
+      if (e.key === 'Tab' && this.teamColor) { e.preventDefault(); this.setTeamMode(!this.teamMode); }
       e.stopPropagation();   // 채팅 입력 중에는 게임 키로 처리되지 않게
     });
     this.toggleBtn.addEventListener('click', () => (this.isOpen ? this.close() : this.open()));
@@ -74,13 +80,35 @@ export class Chat {
     this.onOpenChange?.(false);
   }
 
+  /** 팀전일 때만 "전체/팀" 버튼 표시. teamColor: 내 팀 색 (없으면 숨김) */
+  setTeamAvailable(teamColor) {
+    this.teamColor = teamColor;
+    this.teamBtn.classList.toggle('hidden', !teamColor);
+    if (!teamColor) this.setTeamMode(false);
+    else this.setTeamMode(this.teamMode);
+  }
+
+  setTeamMode(on) {
+    this.teamMode = !!on && !!this.teamColor;
+    this.teamBtn.textContent = this.teamMode ? '팀' : '전체';
+    this.teamBtn.style.background = this.teamMode ? this.teamColor : '';
+    this.input.placeholder = this.teamMode ? '팀원에게만 보내기 (Tab: 전체로)' : '메시지 입력 후 Enter';
+  }
+
   add(m) {
     const line = document.createElement('div');
-    line.className = 'line' + (m.sys ? ' sys' : '');
+    line.className = 'line' + (m.sys ? ' sys' : '') + (m.teamChat != null ? ' team' : '');
     line.dataset.time = Date.now();
     if (m.sys) {
       line.textContent = m.text;
     } else {
+      if (m.teamChat != null) {
+        const tag = document.createElement('span');
+        tag.className = 'team-tag';
+        tag.textContent = '팀';
+        tag.style.background = this.teamColorOf?.(m.teamChat) ?? '#888';
+        line.append(tag);
+      }
       const who = document.createElement('b');
       who.textContent = m.name;
       who.style.color = this.colorOf(m.color);
